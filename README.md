@@ -1,4 +1,9 @@
-# ROPE
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/rope-logo-dark.svg">
+    <img alt="ROPE" src="docs/images/rope-logo.svg" height="72">
+  </picture>
+</h1>
 
 **Resumable Offline Protocol for Emergencies**
 
@@ -79,6 +84,7 @@ python -m pytest
 | `docs/spec.md` | Protocol specification (draft) |
 | `docs/decisions.md` | Decisions with date and reason |
 | `docs/ideas.md` | Ideas not yet planned |
+| `docs/images/` | Logo and symbol (SVG; light and dark variant) |
 | `TASKS.md` | Task board |
 | `src/rope_protocol/` | Package (implementation to come) |
 | `tests/` | Unit tests and, later, the fault-injection test bench |

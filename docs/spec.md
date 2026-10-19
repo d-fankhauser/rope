@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/rope-logo-dark.svg">
+  <img alt="ROPE" src="images/rope-logo.svg" height="56">
+</picture>
+
 # ROPE – Protocol Specification
 
 **Status: draft 0 (concept).** This document describes the goals, model and behaviour of ROPE. The wire format
