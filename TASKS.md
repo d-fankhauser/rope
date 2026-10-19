@@ -16,6 +16,9 @@ _(see `docs/ideas.md`)_
 - [ ] **Participant list and roles** (source, consumer, recipient), greeting with plain-language rejection reasons.
 - [ ] **Offline media** as a second path (export/import of segments and messages).
 - [ ] **Packaging** as `rope-protocol` on PyPI (check name availability first).
+- [ ] **Heartbeat and timeout for radio links:** the assumed 2 s / ~10 s may be too short for directional radio links
+      (longer dropouts are normal there). Make both configurable; measure on a real radio network before fixing
+      defaults (spec §9).
 - [ ] Resolve the open points listed at the end of `docs/spec.md`.
 
 ## In progress

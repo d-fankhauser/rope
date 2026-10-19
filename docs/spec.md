@@ -183,9 +183,16 @@ any failure. Reconnect back-off grows from 1 s to at most 10 s and never gives u
 | Outage | What happens |
 |---|---|
 | Up to a few seconds, e.g. 0.5 s | TCP retransmits; the connection stays up. The core notices nothing. |
-| No sign of life for about 10 s | Connection considered lost (heartbeat every 2 s, **assumed** suitable). Reconnect, greet, continue from the committed offset; unacknowledged segments are resent. |
+| No sign of life for about 10 s | Connection considered lost (heartbeat every 2 s, **assumed** suitable – **may be too short for radio links**, see note below). Reconnect, greet, continue from the committed offset; unacknowledged segments are resent. |
 | Minutes to hours | The source keeps recording; nothing piles up in memory. After reconnecting the backlog is transferred. |
 | Device restart | Committed offsets and outbox are on disk; work continues from the last acknowledged point. |
+
+**Note on heartbeat and timeout (open, must not get lost):** The values above (2 s heartbeat, ~10 s until a connection
+counts as lost) are assumptions. On directional radio links, longer dropouts are normal – shadowing, movement of a
+vessel or vehicle, antenna alignment. A timeout that is too short turns every such dropout into a disconnect with an
+unnecessary reconnect and greeting. Therefore heartbeat interval and timeout **must be configurable** and are to be
+**measured on real radio links** before defaults are fixed. Losing the TCP connection is harmless for data (resume from
+the committed offset), but frequent reconnects cost time and bandwidth.
 
 **Catch-up order (proposed, open):** messages first, then the tail of the currently growing stream (so the consumer is
 up to date), then the backlog in order.
@@ -255,4 +262,5 @@ every message has arrived exactly once.
 
 - [ ] Data rate of typical streams.
 - [ ] Compression ratio and CPU time on target hardware.
-- [ ] Heartbeat and timeout on a real radio network, so that short dropouts do not count as disconnects.
+- [ ] Heartbeat and timeout on a real radio network, so that short dropouts do not count as disconnects. The current
+      assumption (2 s / ~10 s) may be too short for radio links – see the note in §9. Make both configurable.
