@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rope-protocol"
+dynamic = ["version"]
+description = "ROPE - Resumable Offline Protocol for Emergencies"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Daniel Fankhauser" }]
+requires-python = ">=3.11"
+dependencies = []
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Networking",
+]
+
+[project.urls]
+Homepage = "https://github.com/d-fankhauser/rope"
+Specification = "https://github.com/d-fankhauser/rope/blob/main/docs/spec.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "rope_protocol.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
