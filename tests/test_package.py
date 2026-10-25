@@ -12,6 +12,7 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "rope_protocol"
 def test_version():
     assert isinstance(rope_protocol.__version__, str) and rope_protocol.__version__
     assert isinstance(rope_protocol.PROTOCOL_VERSION, int)
+    assert rope_protocol.DEFAULT_PORT == 47310           # spec 14.1; changing it breaks existing installations
 
 
 def _imported_top_level_modules(path):

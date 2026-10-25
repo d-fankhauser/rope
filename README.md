@@ -77,6 +77,20 @@ python -m pip install pytest pyflakes
 python -m pytest
 ```
 
+### Simulating an unreliable link
+
+No radio link at hand? The link simulator sits between two programs and adds bandwidth limits, latency, blackouts
+and disconnects:
+
+```
+python -m rope_protocol.linksim --listen 127.0.0.1:47311 --target 127.0.0.1:47310 --profile radio
+```
+
+Profiles are `lan`, `wifi`, `radio` and `radio-bad`; `--seed` makes the fault schedule reproducible. All profile
+values are assumptions until measured on real links (see spec §13).
+
+ROPE's default port is **47310**; applications can override it.
+
 ## Repository layout
 
 | Path | Content |
@@ -86,7 +100,7 @@ python -m pytest
 | `docs/ideas.md` | Ideas not yet planned |
 | `docs/images/` | Logo and symbol (SVG; light and dark variant) |
 | `TASKS.md` | Task board |
-| `src/rope_protocol/` | Package: frame codec of the wire format (`frames.py`); the rest is to come |
+| `src/rope_protocol/` | Package: frame codec of the wire format (`frames.py`), link simulator (`linksim.py`); the rest is to come |
 | `tests/` | Unit tests and, later, the fault-injection test bench |
 | `AGENTS.md` | Guidelines for contributors and coding agents |
 
