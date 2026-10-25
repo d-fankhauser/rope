@@ -7,7 +7,6 @@ finished → **Done** (date, short description; details in `docs/`).
 _(see `docs/ideas.md`)_
 
 ## Backlog
-- [ ] **Wire format** in `docs/spec.md`: framing, control messages, checksum algorithm, version negotiation.
 - [ ] **Core: single stream, one source, one hub** – send from committed offset, durable write + fsync before
       acknowledgement, resume after reconnect, final checksum.
 - [ ] **Test bench** – fault-injecting TCP proxy (disconnect at every step, delay, throttling, loss), restarts,
@@ -22,6 +21,7 @@ _(see `docs/ideas.md`)_
 - [ ] Resolve the open points listed at the end of `docs/spec.md`.
 
 ## In progress
+- [ ] **Wire format draft 1** (`feature/wire-format`): spec §14 and frame codec `rope_protocol.frames` with tests.
 
 ## Done
 - 2026-10-19 Repository created: specification draft 0, licence, contribution guidelines, CI (pyflakes + pytest on

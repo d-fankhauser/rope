@@ -16,8 +16,8 @@ ROPE transfers growing files and small messages between a small, closed group of
 networks – radio links, Wi-Fi, no internet. Like a rescue line it holds the connection even when it is pulled:
 an interruption costs time, never data.
 
-> **Status:** concept. The [specification](docs/spec.md) is a draft; the wire format and the implementation do not
-> exist yet. Interfaces will change.
+> **Status:** concept. The [specification](docs/spec.md) is draft 1 with a proposed wire format; only the frame codec
+> is implemented so far. Interfaces will change.
 
 ## Why
 
@@ -86,7 +86,7 @@ python -m pytest
 | `docs/ideas.md` | Ideas not yet planned |
 | `docs/images/` | Logo and symbol (SVG; light and dark variant) |
 | `TASKS.md` | Task board |
-| `src/rope_protocol/` | Package (implementation to come) |
+| `src/rope_protocol/` | Package: frame codec of the wire format (`frames.py`); the rest is to come |
 | `tests/` | Unit tests and, later, the fault-injection test bench |
 | `AGENTS.md` | Guidelines for contributors and coding agents |
 

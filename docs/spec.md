@@ -5,8 +5,9 @@
 
 # ROPE – Protocol Specification
 
-**Status: draft 0 (concept).** This document describes the goals, model and behaviour of ROPE. The wire format
-(framing, message encoding, version negotiation details) is not yet defined – see [Open points](#open-points).
+**Status: draft 1.** This document describes the goals, model and behaviour of ROPE, and since draft 1 the wire format
+([§14](#14-wire-format)). The wire format is **proposed**: it may change until the first release, after measurements
+and the first implementation – see [Open points](#open-points).
 
 Every statement is marked as one of:
 
@@ -250,9 +251,123 @@ bench runs on Windows and Linux in CI (**decided**):
 **Pass criterion of every test:** at the end the stream at the receiver is bit-for-bit identical to the original, and
 every message has arrived exactly once.
 
+## 14. Wire format
+
+Everything in this section is **proposed** (draft 1).
+
+### 14.1 Transport
+
+- ROPE runs over one TCP connection per participant (§5). The port is configurable and has no default yet (open point).
+- An application may wrap the connection in TLS, e.g. with certificates on both sides, when the network is not closed
+  (§11). The frames inside are unchanged; the core does not know whether TLS is in use.
+- All integers are unsigned and big-endian (network byte order).
+
+### 14.2 Frames
+
+Everything on the connection is a sequence of frames:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 2 | magic `0x52 0x50` (`RP`) |
+| 2 | 1 | protocol version |
+| 3 | 1 | frame type |
+| 4 | 4 | meta length *M* |
+| 8 | 4 | blob length *B* |
+| 12 | *M* | **meta:** a JSON object, UTF-8 |
+| 12 + *M* | *B* | **blob:** raw bytes (segment data, message body), may be empty |
+| 12 + *M* + *B* | 4 | CRC-32 (as in zlib/ISO-HDLC) over all preceding bytes of the frame |
+
+- **Limits:** *M* ≤ 64 KiB and *B* ≤ 1 MiB. A receiver checks both lengths **before** reading the rest. A frame that
+  is too long, has a wrong magic or a wrong CRC is answered with `ERROR`, and then the connection is closed. Nothing
+  is acknowledged, so nothing is lost: after reconnecting, the transfer continues from the committed offset (§9).
+- **Why JSON for meta:** readable in network captures, part of every standard library, and extendable. Unknown keys
+  are ignored, so a newer participant can add keys without breaking older ones. The cost is about 100–200 bytes per
+  segment of up to 256 KiB, below 0.1 %.
+- **Meta encoding:** compact (no spaces), keys sorted, non-ASCII characters as UTF-8. Receivers must accept any valid
+  JSON object; the rule only makes frames reproducible for test vectors.
+- **Why a CRC per frame:** the TCP checksum is weak; the CRC catches damage between the network stack and the
+  application. It protects the transfer; stored data is protected separately (segment CRC, stream SHA-256).
+
+### 14.3 Frame types
+
+Types `0x00`–`0x7F` belong to the core. A receiver that does not know a core type answers with `ERROR` and closes the
+connection. Types `0x80`–`0xFF` are extensions: a receiver that does not know one ignores it.
+
+| Type | Name | Direction | Meta (required keys) | Blob |
+|---|---|---|---|---|
+| `0x01` | `HELLO` | participant → hub | `participant`, `operation`, `role`, `versions`, `t`, `have` | – |
+| `0x02` | `WELCOME` | hub → participant | `version`, `hub`, `t`, `t_hello`, `heartbeat_s`, `timeout_s`, `have` | – |
+| `0x03` | `REJECT` | hub → participant | `code`, `text` | – |
+| `0x04` | `HEARTBEAT` | both | `t` | – |
+| `0x05` | `BYE` | both | `reason` | – |
+| `0x06` | `ERROR` | both | `code`, `text` | – |
+| `0x10` | `SEGMENT` | sender → receiver | `stream`, `gen`, `off`, `len`, `crc`, `t`, `enc` | encoded data |
+| `0x11` | `ACK` | receiver → sender | `stream`, `gen`, `committed` | – |
+| `0x12` | `RESEND` | receiver → sender | `stream`, `gen`, `off`, `len` | – |
+| `0x13` | `STREAM_END` | sender → receiver | `stream`, `gen`, `size`, `sha256` | – |
+| `0x14` | `STREAM_CHECK` | receiver → sender | `stream`, `gen`, `result`, `size` | – |
+| `0x15` | `BLOCK_SUMS` | receiver → sender | `stream`, `gen`, `block_size`, `first`, `sums` | – |
+| `0x20` | `MESSAGE` | both | `id`, `from`, `to`, `t`, `kind`, `enc` | encoded body |
+| `0x21` | `MESSAGE_ACK` | both | `id` | – |
+
+"Sender" and "receiver" are roles per stream: a source sends to the hub, and the hub sends to consumers.
+
+### 14.4 Values
+
+- **Times** (`t`, `t_hello`): integer milliseconds since 1970-01-01 UTC, from the clock of the frame's sender.
+- **Identifiers** (`participant`, `hub`, `operation`, `from`, entries of `to`): 1–64 characters from `A–Z a–z 0–9 . _ -`.
+- **Stream name** (`stream`): chosen by the application, 1–255 bytes UTF-8, e.g. `source-1/rec-0005.dat`. A receiver
+  must **never** use it directly as a file path; it maps names to its own storage.
+- **Generation** (`gen`): integer ≥ 1. The sender starts a new generation when a stream is not a continuation of the
+  previous one, e.g. a file became shorter or its beginning changed (§12). Receivers keep every generation separately
+  and never overwrite one with another.
+- **Offsets and lengths** (`off`, `len`, `size`, `committed`): bytes of the raw (decoded) stream.
+- **Checksums:** `crc` is the CRC-32 of the raw segment data after decoding; `sha256` and `sums` are SHA-256 digests in
+  lower-case hex.
+- **Encoding** (`enc`): `none` or `zlib` (§10: low level). The sender uses `zlib` only when it makes the blob smaller.
+  A `zlib` blob is exactly one complete zlib stream. The receiver decodes at most `len` + 1 bytes and rejects anything
+  that is not exactly `len` bytes, so a small blob can never expand into a large amount of memory.
+- **Message id** (`id`): 32 lower-case hex characters chosen by the original sender, e.g. a random UUID. It stays the
+  same across retries and relays.
+- **Message kind** (`kind`): chosen by the application, 1–64 characters, same alphabet as identifiers. The core does
+  not interpret it.
+- **Role** (`role`): `source`, `consumer` or `recipient` (§7).
+- **Reject and error codes** (`code`): `unknown_participant`, `wrong_operation`, `version`, `role`, `busy`,
+  `bad_frame`, `too_large`, `unknown_type`, `storage`, `internal`. `text` is plain language for the operator.
+
+### 14.5 Greeting and version
+
+1. The participant sends `HELLO`. `versions` lists the protocol versions it supports. `have` lists what it already
+   holds as a receiver: `[{"stream": …, "gen": …, "committed": …}]` (empty for a pure source).
+2. The hub picks the highest common version and answers `WELCOME` with `version`. `have` lists what the hub holds from
+   this participant. Otherwise it answers `REJECT` and closes the connection.
+3. Every later frame carries the chosen version in byte 2. The 12-byte header and the frames `HELLO`, `WELCOME` and
+   `REJECT` keep their layout in all versions, so that version 1 can always reject a newer participant with a
+   readable reason.
+4. **Clock offset:** `WELCOME` echoes the participant's `HELLO.t` as `t_hello`. The participant receives `WELCOME` at
+   its own time *r* and estimates the hub clock offset as `t − (t_hello + r) / 2`, with an uncertainty of ± half the
+   round trip. The core reports the estimate to the application and never changes the system clock.
+5. `heartbeat_s` and `timeout_s` from the hub's configuration apply to both sides (§9: configurable, to be measured).
+
+### 14.6 Example (test vector)
+
+A `HEARTBEAT` at `t = 1767225600000` (2026-01-01 00:00 UTC) in version 1, meta `{"t":1767225600000}` (19 bytes),
+empty blob:
+
+```
+52 50 01 04 00 00 00 13 00 00 00 00
+7b 22 74 22 3a 31 37 36 37 32 32 35 36 30 30 30 30 30 7d
+45 28 16 84
+```
+
+The last four bytes are the CRC-32 of the 31 bytes before them. `tests/test_frames.py` checks this vector.
+
 ## Open points
 
-- [ ] Wire format: framing, encoding of control messages, checksum algorithm, version negotiation.
+- [x] Wire format: framing, encoding of control messages, checksum algorithm, version negotiation (draft 1, §14,
+      proposed).
+- [ ] Default TCP port.
+- [ ] Message body size above 1 MiB: split into several frames or forbid (draft 1: at most one blob of 1 MiB).
 - [ ] Network: fixed hub address or discovery; other users on the same network.
 - [ ] Bandwidth and typical outages of the radio links (how often, how long).
 - [ ] Catch-up order: current stream first, or strictly in order.
