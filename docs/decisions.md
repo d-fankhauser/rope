@@ -2,6 +2,17 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-25 – Wire format draft 1 (proposed)
+- One frame layout for everything: 12-byte header, JSON meta, binary blob, CRC-32 (spec §14.2). One parser, readable
+  captures, extendable without breaking older participants (unknown keys ignored, extension types `0x80`–`0xFF`).
+- Limits checked before buffering (meta 64 KiB, blob 1 MiB): bounded memory, never block (§10).
+- CRC-32 per frame and per segment, SHA-256 per whole stream: all in the standard library; CRC is enough against
+  transmission damage, SHA-256 for the final end-to-end check.
+- Streams carry a generation: a shortened or replaced source becomes a new generation, never an overwrite.
+- Clock offset estimated in the greeting, reported to the application, never applied to the system clock.
+- TLS is an optional layer below ROPE, chosen by the application; frames do not change.
+- Proposed until the first release; may change after the first end-to-end implementation and measurements.
+
 ### 2026-10-19 – Repository and process (decided)
 - Public repository, **Apache-2.0** licence: permissive, proprietary applications may use the core, patent grant,
   contributions under the same licence (section 5); the name is not licensed (section 6).
