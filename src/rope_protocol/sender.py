@@ -64,6 +64,7 @@ class OutStream:
         self.acked = 0
         self.sent = 0
         self.end_sent = False
+        self.awaiting_check = False     # STREAM_END sent in this session, its STREAM_CHECK not yet received
         self.result = None              # "ok" / "mismatch" from STREAM_CHECK
         self.checked = asyncio.Event()
         self.repair_rounds = 0          # repairs of this generation that reached the receiver and still mismatched
@@ -83,6 +84,7 @@ class OutStream:
     def start_session(self, committed):
         self.acked = self.sent = committed
         self.end_sent = False
+        self.awaiting_check = False
         self.reset_repair()             # a new final check starts the repair over
 
     def sums_complete(self):
@@ -135,6 +137,10 @@ class StreamSender:
             s.sent = min(s.sent, m["off"])
             self._inflight = [x for x in self._inflight if x[0] != s.key]
         elif t == F.FrameType.STREAM_CHECK:
+            if not s.awaiting_check:            # no STREAM_END of ours is open: a stray answer, never act on it
+                log.warning("%s generation %d: unexpected STREAM_CHECK from the %s ignored", s.name, s.gen, self.peer)
+                return True
+            s.awaiting_check = False
             if s.repair_sent:                   # same session: the repair reached the receiver (TCP keeps order)
                 s.repair_rounds += 1
             if m["result"] == "ok" or s.repair_rounds >= MAX_REPAIR_ROUNDS:
@@ -190,6 +196,8 @@ class StreamSender:
                                                     self.zlib_level, repair=True)
                     await ch.send(frame)
                     progressed = True
+                    if not s.repairs or s.repairs[0][0] != off:
+                        break                           # the repair was restarted meanwhile
                     if off + len(data) >= end:
                         s.repairs.pop(0)
                         if not s.repairs:
@@ -214,6 +222,7 @@ class StreamSender:
                     await ch.send(F.Frame(F.FrameType.STREAM_END, dict(stream=s.name, gen=s.gen, size=n,
                                                                        sha256=digest)))
                     s.end_sent = True
+                    s.awaiting_check = True
             if not progressed:
                 await self.wake.wait(self.poll_s)
         raise ConnectionError("connection closed")

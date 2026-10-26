@@ -229,6 +229,9 @@ All numbers are **proposed** starting values until measured.
   connection breaks between storing and telling, a resent copy is a duplicate and would not tell it again. So every
   untold message is told after each received message and when a session starts. The application is told at least
   once; in practice exactly once (it is told twice only if the program stops between telling and recording that).
+  Within one run of the program the participant also notes in memory, without a pause after telling, what it told:
+  a session that ends while the flag is being written does not lead the next session to tell again (found by the
+  test bench, §13).
 - **Priority:** messages travel in their own task on the same connection. A message waits behind at most the
   segment being written, not behind the stream backlog. The test bench checks this on a simulated 1 MB/s link
   with a 3 MB file in progress: the message must arrive within 2 s, while the file is still on its way.
@@ -299,7 +302,9 @@ Core idea: the data lives on the source's disk and the receiver knows its commit
 never data.
 
 Connection states (**proposed**): *disconnected* → *connecting* → *greeting* → *active* → back to *disconnected* on
-any failure. Reconnect back-off grows from 1 s to at most 10 s and never gives up.
+any failure. Reconnect back-off grows from 1 s to at most 10 s and never gives up. This includes unexpected errors
+(bugs): they are logged with their details and end only the current session, never the connection loop
+(**decided** 2026-10-26 after the test bench found a case where the loop ended silently).
 
 | Outage | What happens |
 |---|---|
@@ -373,6 +378,20 @@ bench runs on Windows and Linux in CI (**decided**):
 
 **Pass criterion of every test:** at the end the stream at the receiver is bit-for-bit identical to the original, and
 every message has arrived exactly once.
+
+**Faults at every step** (`tests/framefault.py`, `tests/test_faults.py`, implemented 2026-10-26). A frame-aware
+proxy injects exactly one fault at a chosen frame: connection cut before it, cut in the middle of it, the frame sent
+twice, or the frame damaged. The scenario uses every part of the protocol – greeting, segments, a header changed in
+place (final check, block sums, repair), relaying to a consumer, messages both ways and the delivery report – on the
+link of the source and on the link of a consumer.
+
+- A *step* is every occurrence of every frame type in a clean run, in both directions (heartbeats: the first two;
+  their number depends on timing). Targeting by type rather than by position makes sure that rare frames such as
+  `STREAM_CHECK` are hit.
+- The normal test run cuts the connection at every step and tries the other faults at a few steps. Setting
+  `ROPE_SOAK=1` runs every fault at every step (several minutes); it belongs before every release.
+- A duplicated frame inside one TCP connection does not happen on a real network (TCP removes duplicates). It is
+  still tested because it shows how a participant reacts to a frame it did not expect.
 
 **Link simulator** (`rope_protocol.linksim`, implemented). It is a TCP proxy between two participants and behaves like
 an unreliable link, per direction:
@@ -554,7 +573,8 @@ recording. Resending the whole file for that would cost the full transfer again 
    repair start over from what the receiver holds.
 
 Without `repair`, a segment below the committed offset is a duplicate and is not written (§8.3), so a late duplicate
-never changes stored data. Streams are kept per participant, so only a stream's own sender can repair it.
+never changes stored data. A `STREAM_CHECK` that does not answer an open `STREAM_END` of the same session is logged
+and ignored, and so are `BLOCK_SUMS` that nobody waits for: a stray answer never restarts a repair. Streams are kept per participant, so only a stream's own sender can repair it.
 
 Status: **proposed** (block size, the half rule and the 3 rounds are assumptions until measured).
 

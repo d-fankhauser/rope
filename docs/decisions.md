@@ -2,6 +2,17 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – Test bench with a fault at every step (decided)
+- **Frame-aware proxy only in the tests.** The link simulator in the package stays byte-oriented and independent
+  of ROPE frames; the frame-aware proxy is a test tool.
+- **Steps by frame type and occurrence**, not by position: heartbeats shift positions, and a first version never hit
+  `STREAM_CHECK`.
+- **Normal run: cut at every step; `ROPE_SOAK=1`: every fault at every step.** The full set takes several minutes,
+  too long for every push, but belongs before a release.
+- **Unexpected errors end only the session, never the connection loop.** The bench found that a stray answer made
+  the source's repair loop fail and the loop end silently - the source never connected again. Besides fixing the
+  cause, the loop now logs any unexpected error and reconnects.
+
 ### 2026-10-26 – Delivery report to the sender of a message (proposed)
 - **Two new core frames, `DELIVERY` and `DELIVERY_ACK`** (wire format draft 1, changed before any release). Reusing
   `MESSAGE_ACK` would mix up "I took custody of this message" with "I have your report".

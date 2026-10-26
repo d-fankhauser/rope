@@ -3,6 +3,7 @@ once - also over a harsh link, while recipients are offline and across hub resta
 
 import asyncio
 import os
+import threading
 from collections import Counter
 
 import pytest
@@ -10,7 +11,7 @@ import pytest
 from rope_protocol import frames as F
 from rope_protocol.hub import Hub
 from rope_protocol.linksim import Profile
-from rope_protocol.messages import MessageStore
+from rope_protocol.messages import Mailbox, MessageStore
 from rope_protocol.source import Source
 from test_relay import BLOCK, HARSH, PARTICIPANTS, RelayBench
 from test_transfer import FAST, SRC, _file, _until
@@ -44,6 +45,35 @@ def test_stored_but_untold_message_is_told_after_restart(tmp_path):
             assert got == [("b" * 32, b"stored, not told")]                # told once, not twice
             assert len(r.inbox()) == 1
     asyncio.run(run())
+
+
+def test_session_cancelled_while_recording_told_does_not_tell_twice(tmp_path):
+    """Found by the test bench: the session ended (connection cut) after telling the application but before the
+    "told" flag was on disk; the next session told the message again, without any restart."""
+    got = []
+    box = Mailbox(str(tmp_path / "box"), "r-1", on_message=lambda m, body: got.append(m["id"]))
+    meta = {"id": "c" * 32, "from": "source-1", "to": ["r-1"], "t": 1, "kind": "note"}
+    box.store.put(meta, b"x", {"box": "in", "told": False})
+    update = box.store.update
+    slow = threading.Event()
+
+    def slow_update(msg_id, **state):
+        slow.wait(1.0)                              # the flag reaches the disk only after the session is gone
+        update(msg_id, **state)
+    box.store.update = slow_update
+
+    async def run():
+        first = asyncio.ensure_future(box.notify())
+        await _until(lambda: got)
+        first.cancel()                              # the session ends while the flag is being written
+        try:
+            await first
+        except asyncio.CancelledError:
+            pass
+        await box.notify()                          # next session
+        slow.set()
+    asyncio.run(run())
+    assert got == ["c" * 32]
 
 
 def test_message_to_consumer_and_recipient_exactly_once(tmp_path):

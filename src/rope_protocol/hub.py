@@ -153,6 +153,10 @@ class Hub:
         except (ConnectionError, OSError) as e:
             log.info("connection of %s ended: %s", participant or "unknown participant", e)
             ch.abort()
+        except Exception:
+            # a bug ends this connection only; the participant reconnects
+            log.exception("connection of %s: unexpected error", participant or "unknown participant")
+            ch.abort()
         finally:
             ch.abort()                                  # every way out closes the connection
             self._connections.discard(me)
