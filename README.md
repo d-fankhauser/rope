@@ -37,7 +37,8 @@ transfer).
   again.
 - **Never blocks the producer** – separate process, read-only file access without locks, bounded memory.
 - **Offline** – no internet, no cloud, no external services.
-- **Small groups** – star topology with a hub and a closed participant list (source, consumer, recipient roles).
+- **Small groups** – star topology with a hub and a closed participant list: source, consumer and recipient roles,
+  names for the operator, and per consumer a choice of which streams it receives.
 - **Application-agnostic core** – the core knows nothing about the data; applications define streams and messages.
 - **Standard library only** – no third-party runtime dependencies.
 - **Two paths** – the same segments and messages can also travel on removable media and mix with the network.
@@ -53,7 +54,8 @@ ROPE has **no encryption** by design and is meant for closed networks – see
                   └──TCP──▶ recipient(s)   (messages only)
 ```
 
-1. Every participant connects to the hub and greets it (identifier, role, protocol version).
+1. Every participant connects to the hub and greets it (identifier, role, protocol version). The hub checks its
+   participant list and tells everybody the names and roles of the group.
 2. The hub reports how far it has stored each stream (*committed offset*).
 3. The source sends segments from there; the hub writes, syncs, then acknowledges.
 4. When a stream is complete, a final checksum confirms the whole file; on a difference, only the differing blocks
@@ -106,7 +108,7 @@ ROPE's default port is **47310**; applications can override it.
 | `docs/ideas.md` | Ideas not yet planned |
 | `docs/images/` | Logo and symbol (SVG; light and dark variant) |
 | `TASKS.md` | Task board |
-| `src/rope_protocol/` | Package: frame codec (`frames.py`), link simulator (`linksim.py`), durable store (`store.py`), sending and receiving side of streams (`sender.py`, `receiver.py`), messages (`messages.py`), offline media (`media.py`), participants (`hub.py`, `source.py`, `consumer.py`, `recipient.py`, base `participant.py`) |
+| `src/rope_protocol/` | Package: frame codec (`frames.py`), link simulator (`linksim.py`), durable store (`store.py`), sending and receiving side of streams (`sender.py`, `receiver.py`), messages (`messages.py`), offline media (`media.py`), participant list (`roster.py`), participants (`hub.py`, `source.py`, `consumer.py`, `recipient.py`, base `participant.py`) |
 | `tests/` | Unit tests and, later, the fault-injection test bench |
 | `AGENTS.md` | Guidelines for contributors and coding agents |
 

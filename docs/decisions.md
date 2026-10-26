@@ -2,6 +2,18 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – Participant list with names and a stream selection per consumer (proposed)
+- **Names for the operator.** Identifiers are technical (`c-1`); people in the field need "Tablet" or "Analysis
+  laptop" in rejections and in the application.
+- **Selection as patterns over `<source>/<stream>`** (standard library `fnmatch`, case-sensitive everywhere): one
+  rule covers "everything of one source", "one kind of stream from all sources" and single streams, without new
+  frames. Default: everything, as before - existing lists keep working unchanged.
+- **Selection is kept at the hub only.** It decides what the hub sends; participants do not need it.
+- **Every participant learns the names and roles** in `WELCOME` and in the hub's bundles, so an application can
+  address messages and show names also with only a stick. The newest list by hub time wins, so an old stick never
+  undoes a newer greeting.
+- **A narrower selection deletes nothing** at the consumer; it only stops further data.
+
 ### 2026-10-26 – Offline media as bundles of wire-format frames (proposed)
 - **Same frames as on the network**, in files on the medium. No second format to specify and test; every check of
   the network path (CRC per frame, segment CRC, committed offset, duplicates, final SHA-256) applies to media as

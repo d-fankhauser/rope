@@ -13,6 +13,8 @@ import struct
 import zlib
 from dataclasses import dataclass, field
 
+from . import roster
+
 MAGIC = b"RP"
 VERSION = 1
 HEADER = struct.Struct(">2sBBII")
@@ -239,6 +241,10 @@ def validate(frame):
         for k in ("heartbeat_s", "timeout_s"):
             if isinstance(meta[k], bool) or not isinstance(meta[k], (int, float)) or meta[k] <= 0:
                 raise FrameError("bad_frame", "%s must be a positive number" % k)
+        if "participants" in meta:
+            reason = roster.check_public(meta["participants"])
+            if reason:
+                raise FrameError("bad_frame", reason)
     if ftype in (FrameType.SEGMENT, FrameType.MESSAGE) and meta["enc"] not in ENCODINGS:
         raise FrameError("bad_frame", "unknown encoding %r" % (meta["enc"],))
     if ftype is FrameType.SEGMENT and not isinstance(meta.get("repair", False), bool):

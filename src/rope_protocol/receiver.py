@@ -57,6 +57,8 @@ class StreamReceiver:
     async def _stream_end(self, ch, m):
         rs = await asyncio.to_thread(self.store.get, self.owner, m["stream"], m["gen"])
         result = await asyncio.to_thread(rs.finish, m["size"], m["sha256"])
+        if self.on_checked:                 # tell the application as soon as the store says so, not after sending
+            self.on_checked(self.owner, m["stream"], m["gen"], result, rs.path)
         await ch.send(F.Frame(F.FrameType.STREAM_CHECK, dict(stream=m["stream"], gen=m["gen"], result=result,
                                                              size=rs.committed)))
         if result != "ok":
@@ -66,5 +68,3 @@ class StreamReceiver:
                 await ch.send(F.Frame(F.FrameType.BLOCK_SUMS, dict(stream=m["stream"], gen=m["gen"],
                                                                    block_size=self.block_size, first=first,
                                                                    sums=sums[first:first + SUMS_PER_FRAME])))
-        if self.on_checked:
-            self.on_checked(self.owner, m["stream"], m["gen"], result, rs.path)

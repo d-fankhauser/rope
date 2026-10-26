@@ -103,7 +103,7 @@ def test_latency_each_way():
             assert await _echo_through(proxy, b"ping") == b"ping"
             rtt = time.monotonic() - t0
         server.close()
-        assert 0.4 <= rtt < 2.0, rtt
+        assert 0.37 <= rtt < 2.0, rtt                  # 2 x 0.2 s; Windows timers are ~16 ms coarse
     asyncio.run(run())
 
 

@@ -4,7 +4,8 @@ Specification: docs/spec.md. Implemented so far: the frame codec of the wire for
 link simulator for tests (``rope_protocol.linksim``) and streams from sources via a hub to consumers
 (``rope_protocol.source``, ``rope_protocol.hub``, ``rope_protocol.consumer``; shared parts in ``sender``,
 ``receiver``, ``participant``, ``store``), messages with custody (``rope_protocol.messages``,
-``rope_protocol.recipient``) and offline media as a second path (``rope_protocol.media``).
+``rope_protocol.recipient``), offline media as a second path (``rope_protocol.media``) and the participant list
+with names and a stream selection per consumer (``rope_protocol.roster``).
 """
 
 __version__ = "0.0.1.dev0"
