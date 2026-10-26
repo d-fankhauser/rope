@@ -13,6 +13,54 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+async def reap(tasks, timeout_s=2.0):
+    """Cancel helper tasks and collect their results, waiting at most ``timeout_s``.
+
+    Bounded on purpose: on Python 3.11 ``asyncio.wait_for`` can lose a cancellation, so a task might not end at once;
+    the caller must never hang on it. Collecting the results keeps late failures out of the "never retrieved" log.
+    """
+    tasks = [t for t in tasks if t is not None]
+    for t in tasks:
+        t.add_done_callback(_retrieve)              # also if this cleanup itself is cancelled while waiting
+        t.cancel()
+    if tasks:
+        await asyncio.wait(tasks, timeout=timeout_s)
+
+
+def _retrieve(task):
+    if not task.cancelled():
+        task.exception()
+
+
+class Wakeup:
+    """Like ``asyncio.Event`` with a timeout on ``wait``, for a single waiter, built without ``asyncio.wait_for``
+    (see ``reap``): a cancellation always ends the wait."""
+
+    def __init__(self):
+        self._flag = False
+        self._fut = None
+
+    def set(self):
+        self._flag = True
+        if self._fut is not None and not self._fut.done():
+            self._fut.set_result(None)
+
+    def clear(self):
+        self._flag = False
+
+    async def wait(self, timeout_s):
+        if self._flag:
+            return
+        loop = asyncio.get_running_loop()
+        fut = self._fut = loop.create_future()
+        timer = loop.call_later(timeout_s, lambda: fut.done() or fut.set_result(None))
+        try:
+            await fut
+        finally:
+            timer.cancel()
+            self._fut = None
+
+
 class Channel:
     """Send and receive validated frames. Any failure raises ConnectionError (or FrameError for bad frames)."""
 
@@ -39,6 +87,10 @@ class Channel:
             except asyncio.TimeoutError:
                 raise ConnectionError("send timed out after %.1f s" % self.send_timeout_s) from None
             self.last_sent = time.monotonic()
+
+    @property
+    def closed(self):
+        return self.writer.is_closing()
 
     async def recv(self, timeout_s):
         """Next frame; ConnectionError if nothing at all arrives within ``timeout_s``."""

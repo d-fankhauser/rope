@@ -8,7 +8,7 @@ import logging
 
 from . import PROTOCOL_VERSION, DEFAULT_PORT
 from . import frames as F
-from .channel import Channel, now_ms
+from .channel import Channel, now_ms, reap
 from .store import GapError, StreamStore
 
 log = logging.getLogger("rope.hub")
@@ -145,7 +145,7 @@ class Hub:
                 else:
                     raise F.FrameError("bad_frame", "unexpected %s from a source" % F.FrameType(t).name)
         finally:
-            beat.cancel()
+            await reap([beat])
 
     async def _segment(self, ch, participant, f):
         m = f.meta

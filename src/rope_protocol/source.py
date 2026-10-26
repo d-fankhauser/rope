@@ -13,7 +13,7 @@ import random
 
 from . import PROTOCOL_VERSION, DEFAULT_PORT
 from . import frames as F
-from .channel import Channel, now_ms
+from .channel import Channel, Wakeup, now_ms, reap
 from .store import write_json_atomic
 
 log = logging.getLogger("rope.source")
@@ -142,7 +142,7 @@ class Source:
         self.sessions = 0
         self.rejected = None
         self._stop = asyncio.Event()
-        self._wake = asyncio.Event()
+        self._wake = Wakeup()
         self._task = None
 
     # --- application interface -------------------------------------------------------------------------------
@@ -230,9 +230,8 @@ class Source:
                 except Exception:
                     pass
         finally:
-            for t in tasks:
-                t.cancel()
             ch.abort()
+            await reap(tasks)
 
     async def _receive(self, ch):
         while True:
@@ -262,7 +261,7 @@ class Source:
                 raise ConnectionError("hub closed the session: %s" % m["reason"])
 
     async def _send(self, ch):
-        while True:
+        while not ch.closed:
             self._wake.clear()
             progressed = False
             for s in self.streams.values():
@@ -289,7 +288,5 @@ class Source:
                                                                        sha256=digest)))
                     s.end_sent = True
             if not progressed:
-                try:
-                    await asyncio.wait_for(self._wake.wait(), self.poll_s)
-                except asyncio.TimeoutError:
-                    pass
+                await self._wake.wait(self.poll_s)
+        raise ConnectionError("connection closed")

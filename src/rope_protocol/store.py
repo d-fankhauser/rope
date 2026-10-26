@@ -57,8 +57,9 @@ def _fsync_dir(path):
 
 
 class ReceivedStream:
-    """One generation of one stream at the receiver. Not thread-safe by itself; ``StreamStore`` hands out one
-    instance per stream and the caller serialises access (one session per participant)."""
+    """One generation of one stream at the receiver. ``StreamStore`` hands out one instance per stream; ``write`` and
+    ``finish`` are serialised by a lock, because a replaced session's write may still be running in its worker thread
+    while the new session writes the same segment."""
 
     def __init__(self, folder, participant, stream, gen):
         self.folder = folder
@@ -67,6 +68,7 @@ class ReceivedStream:
         self.gen = gen
         self.path = os.path.join(folder, "data")
         self._state_path = os.path.join(folder, "state.json")
+        self._lock = threading.Lock()
         os.makedirs(folder, exist_ok=True)
         state = {}
         if os.path.exists(self._state_path):
@@ -101,32 +103,35 @@ class ReceivedStream:
         Already stored bytes are not written again (duplicates are acknowledged, spec 8.3). A segment that starts
         beyond the committed offset raises GapError.
         """
-        if off > self.committed:
-            raise GapError(self.committed)
-        end = off + len(data)
-        if end <= self.committed or self.complete:
+        with self._lock:
+            if off > self.committed:
+                raise GapError(self.committed)
+            end = off + len(data)
+            if end <= self.committed or self.complete:
+                return self.committed
+            tail = data[self.committed - off:]
+            with open(self.path, "r+b") as f:
+                f.seek(self.committed)
+                f.write(tail)
+                f.flush()
+                os.fsync(f.fileno())
+            self._sha.update(tail)
+            self.committed = end
+            self._save()
             return self.committed
-        tail = data[self.committed - off:]
-        with open(self.path, "r+b") as f:
-            f.seek(self.committed)
-            f.write(tail)
-            f.flush()
-            os.fsync(f.fileno())
-        self._sha.update(tail)
-        self.committed = end
-        self._save()
-        return self.committed
 
     def finish(self, size, sha256):
         """Final check (spec 8.4): returns "ok" or "mismatch" and records it. Bytes are kept either way."""
-        ok = size == self.committed and sha256 == self._sha.hexdigest()
-        self.complete = ok
-        self.verified = "ok" if ok else "mismatch"
-        self._save()
-        return self.verified
+        with self._lock:
+            ok = size == self.committed and sha256 == self._sha.hexdigest()
+            self.complete = ok
+            self.verified = "ok" if ok else "mismatch"
+            self._save()
+            return self.verified
 
     def sha256(self):
-        return self._sha.hexdigest()
+        with self._lock:
+            return self._sha.hexdigest()
 
 
 class StreamStore:

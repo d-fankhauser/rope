@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import threading
 
 import pytest
 
@@ -41,6 +42,30 @@ def test_final_check(tmp_path):
     rs2.write(0, b"data")
     assert rs2.finish(4, hashlib.sha256(b"DATA").hexdigest()) == "mismatch"
     assert open(rs2.path, "rb").read() == b"data"       # kept for inspection
+
+
+def test_concurrent_duplicate_writes_keep_the_checksum(tmp_path):
+    """A replaced session's write may still run in its worker thread while the new session writes the same segment
+    (found by the soak test): the stored bytes and the running checksum must count each byte once."""
+    data = os.urandom(16 * 1024)
+    seg = 1024
+    for attempt in range(5):
+        rs = StreamStore(tmp_path / str(attempt)).get("p", "s", 1)
+        barrier = threading.Barrier(4)
+
+        def writer():
+            barrier.wait()
+            for off in range(0, len(data), seg):
+                rs.write(off, data[off:off + seg])
+
+        threads = [threading.Thread(target=writer) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert rs.committed == len(data)
+        assert open(rs.path, "rb").read() == data
+        assert rs.finish(len(data), hashlib.sha256(data).hexdigest()) == "ok"
 
 
 def test_generations_are_separate_and_names_are_not_paths(tmp_path):
