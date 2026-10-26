@@ -32,7 +32,9 @@ transfer).
 
 - **Resumable** – after any interruption, transfer continues from the last durably stored byte, never from zero.
 - **Custody** – a receiver acknowledges only after the data is on disk (flush + fsync).
-- **End-to-end verified** – checksums per segment and per complete file; bit-for-bit identical results.
+- **End-to-end verified** – checksums per segment and per complete file; bit-for-bit identical results. If bytes
+  changed after they were sent (e.g. a header updated at the end of a recording), only the differing blocks travel
+  again.
 - **Never blocks the producer** – separate process, read-only file access without locks, bounded memory.
 - **Offline** – no internet, no cloud, no external services.
 - **Small groups** – star topology with a hub and a closed participant list (source, consumer, recipient roles).
@@ -54,7 +56,8 @@ ROPE has **no encryption** by design and is meant for closed networks – see
 1. Every participant connects to the hub and greets it (identifier, role, protocol version).
 2. The hub reports how far it has stored each stream (*committed offset*).
 3. The source sends segments from there; the hub writes, syncs, then acknowledges.
-4. When a stream is complete, a final checksum confirms the whole file.
+4. When a stream is complete, a final checksum confirms the whole file; on a difference, only the differing blocks
+   are resent.
 5. On any disconnect: reconnect, greet, continue from the committed offset.
 
 Details: [docs/spec.md](docs/spec.md).

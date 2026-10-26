@@ -159,7 +159,9 @@ All numbers are **proposed** starting values until measured.
 
 - When the stream is complete (application decides, e.g. file unchanged for 10 s), the source sends a checksum of the
   whole stream. The final size is never smaller than what the source has already sent.
-- The receiver compares. On mismatch both sides exchange per-block checksums and only differing blocks are resent.
+- The receiver compares. On mismatch both sides exchange per-block checksums and only differing blocks are resent
+  (§14.7). Bytes the source changed in place, e.g. a header updated at the end of a recording, are fixed this way
+  without a full retransfer.
 - The stream is then marked complete and verified.
 
 ### 8.5 Messages
@@ -232,7 +234,8 @@ VPN). The participant list prevents accidental mix-ups, not attacks.
 | Damaged segment | checksum mismatch | request that range again, keep the rest |
 | Duplicate segment | offset already stored | acknowledge, do not write |
 | Whole stream differs | final checksum | compare per-block checksums, resend only differing blocks |
-| Source file shortened or replaced | file smaller than committed offset | never overwrite; report in plain language; keep as a new version |
+| Source changed bytes in place | final checksum | resend only the differing blocks (§14.7) |
+| Source file shortened or replaced | file shorter than before, or most blocks differ at the final check | never overwrite; report in plain language; keep as a new version |
 | Unknown participant | not on the list | reject with a plain-language reason |
 | Different protocol version | greeting | reject or operate on the common subset, with a plain-language reason |
 | Wrong operation | operation identifier | store separately, never mix |
@@ -342,6 +345,8 @@ connection. Types `0x80`–`0xFF` are extensions: a receiver that does not know 
 
 "Sender" and "receiver" are roles per stream: a source sends to the hub, and the hub sends to consumers.
 
+Optional keys: `SEGMENT` may carry `repair` (`true` or `false`, default `false`, §14.7).
+
 ### 14.4 Values
 
 - **Times** (`t`, `t_hello`): integer milliseconds since 1970-01-01 UTC, from the clock of the frame's sender.
@@ -349,8 +354,9 @@ connection. Types `0x80`–`0xFF` are extensions: a receiver that does not know 
 - **Stream name** (`stream`): chosen by the application, 1–255 bytes UTF-8, e.g. `source-1/rec-0005.dat`. A receiver
   must **never** use it directly as a file path; it maps names to its own storage.
 - **Generation** (`gen`): integer ≥ 1. The sender starts a new generation when a stream is not a continuation of the
-  previous one, e.g. a file became shorter or its beginning changed (§12). Receivers keep every generation separately
-  and never overwrite one with another.
+  previous one: the file became shorter, or the final check finds more than half of its blocks changed (§14.7).
+  Receivers keep every generation separately and never overwrite one with another. Bytes changed in place within a
+  generation (e.g. a header updated at the end of a recording) are not a new generation; the block repair fixes them.
 - **Offsets and lengths** (`off`, `len`, `size`, `committed`): bytes of the raw (decoded) stream.
 - **Checksums:** `crc` is the CRC-32 of the raw segment data after decoding; `sha256` and `sums` are SHA-256 digests in
   lower-case hex.
@@ -391,6 +397,35 @@ empty blob:
 ```
 
 The last four bytes are the CRC-32 of the 31 bytes before them. `tests/test_frames.py` checks this vector.
+
+### 14.7 Final check and block repair
+
+Why: a recording program may change bytes it has already written, typically a header with counters at the end of a
+recording. Resending the whole file for that would cost the full transfer again over a slow link.
+
+1. When the application declares the stream complete, the sender sends `STREAM_END` with the final `size` and the
+   `sha256` of that many bytes of its file, once everything up to `size` is acknowledged.
+2. The receiver compares with what it holds and answers `STREAM_CHECK` (`ok` or `mismatch`, `size` = its committed
+   offset). On `mismatch` it then sends `BLOCK_SUMS`: the SHA-256 of every block of `block_size` bytes of its data
+   (the last block may be shorter), in index order, several frames if needed; `first` is the index of the frame's
+   first block. Draft 1: blocks of 1 MiB and at most 512 sums per frame (about 34 KiB of meta).
+3. The sender has all sums when it holds ⌈`size` / `block_size`⌉ of them. It compares each block with its file:
+   - If **more than half** of the blocks differ, the file was replaced rather than edited: the sender starts a new
+     generation, and the receiver keeps the old one unchanged.
+   - Otherwise it resends exactly the differing blocks as `SEGMENT` with `repair: true` and then sends `STREAM_END`
+     again. The receiver overwrites those bytes below its committed offset, makes them durable, and acknowledges as
+     usual (the committed offset does not change).
+4. After **3** repairs that reached the receiver and still end in `mismatch`, the sender stops and reports the
+   mismatch to the application in plain language. The receiver keeps all bytes. A repair counts as reached when the
+   answer to the `STREAM_END` after it arrives on the same connection (frames keep their order); a repair cut off by
+   a disconnect does not count.
+5. A disconnect at any point is harmless. After reconnecting, the sender sends `STREAM_END` again, and the check and
+   repair start over from what the receiver holds.
+
+Without `repair`, a segment below the committed offset is a duplicate and is not written (§8.3), so a late duplicate
+never changes stored data. Streams are kept per participant, so only a stream's own sender can repair it.
+
+Status: **proposed** (block size, the half rule and the 3 rounds are assumptions until measured).
 
 ## Open points
 

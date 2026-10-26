@@ -2,6 +2,16 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – Block repair instead of a new generation for in-place changes (proposed)
+- **A changed beginning is no longer a new generation.** Recording programs may update a header after the data
+  was written (to be confirmed on real devices). With the earlier rule, that would have meant a full retransfer of
+  every recording over a slow link. Now only a shorter file starts a new generation right away; bytes changed in
+  place are found by the final check and only the differing blocks are resent (spec §14.7).
+- **More than half of the blocks differ → new generation.** Then the file was evidently replaced, not edited. The
+  receiver keeps the old version, as before.
+- **At most 3 repairs**, then the mismatch is reported to the application, never retried forever.
+- Block size 1 MiB, the half rule and 3 rounds are **assumed** values until measured.
+
 ### 2026-10-26 – Default port and link simulator
 - **Default port 47310, overridable by every application (decided).** The maintainer wants a default that is
   overridable and not used by other software by chance; the exact number does not matter. When chosen, 47310 was not

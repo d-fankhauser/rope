@@ -45,6 +45,17 @@ def write_json_atomic(path, obj):
     _fsync_dir(os.path.dirname(path))
 
 
+def _hash_file(path, size):
+    """Running SHA-256 over the first ``size`` bytes of ``path``."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        left = size
+        while left > 0 and (chunk := f.read(min(READ_CHUNK, left))):
+            h.update(chunk)
+            left -= len(chunk)
+    return h
+
+
 def _fsync_dir(path):
     """Make a rename durable where the platform allows it (POSIX); Windows has no directory handles for this."""
     if os.name != "posix":
@@ -85,10 +96,7 @@ class ReceivedStream:
                 f.truncate(self.committed)
                 f.flush()
                 os.fsync(f.fileno())
-        self._sha = hashlib.sha256()
-        with open(self.path, "rb") as f:
-            while chunk := f.read(READ_CHUNK):
-                self._sha.update(chunk)
+        self._sha = _hash_file(self.path, self.committed)
         if not state:
             self._save()
 
@@ -97,17 +105,27 @@ class ReceivedStream:
                                                  committed=self.committed, complete=self.complete,
                                                  verified=self.verified))
 
-    def write(self, off, data):
+    def write(self, off, data, repair=False):
         """Store ``data`` at ``off`` durably and return the new committed offset.
 
-        Already stored bytes are not written again (duplicates are acknowledged, spec 8.3). A segment that starts
-        beyond the committed offset raises GapError.
+        Already stored bytes are not written again (duplicates are acknowledged, spec 8.3) - unless ``repair`` is set
+        (spec 14.7): then the part below the committed offset overwrites what is stored. A segment that starts beyond
+        the committed offset raises GapError.
         """
         with self._lock:
             if off > self.committed:
                 raise GapError(self.committed)
             end = off + len(data)
-            if end <= self.committed or self.complete:
+            if self.complete:
+                return self.committed
+            if repair and off < self.committed:
+                with open(self.path, "r+b") as f:
+                    f.seek(off)
+                    f.write(data[:self.committed - off])
+                    f.flush()
+                    os.fsync(f.fileno())
+                self._sha = None                        # recomputed from the file when needed
+            if end <= self.committed:
                 return self.committed
             tail = data[self.committed - off:]
             with open(self.path, "r+b") as f:
@@ -115,7 +133,8 @@ class ReceivedStream:
                 f.write(tail)
                 f.flush()
                 os.fsync(f.fileno())
-            self._sha.update(tail)
+            if self._sha is not None:
+                self._sha.update(tail)
             self.committed = end
             self._save()
             return self.committed
@@ -123,15 +142,34 @@ class ReceivedStream:
     def finish(self, size, sha256):
         """Final check (spec 8.4): returns "ok" or "mismatch" and records it. Bytes are kept either way."""
         with self._lock:
-            ok = size == self.committed and sha256 == self._sha.hexdigest()
+            ok = size == self.committed and sha256 == self._digest()
             self.complete = ok
             self.verified = "ok" if ok else "mismatch"
             self._save()
             return self.verified
 
+    def block_sums(self, block_size):
+        """SHA-256 of every block of ``block_size`` bytes of the stored data (the last one may be shorter)."""
+        with self._lock:
+            sums = []
+            with open(self.path, "rb") as f:
+                left = self.committed
+                while left > 0:
+                    chunk = f.read(min(block_size, left))
+                    if not chunk:
+                        break
+                    sums.append(hashlib.sha256(chunk).hexdigest())
+                    left -= len(chunk)
+            return sums
+
     def sha256(self):
         with self._lock:
-            return self._sha.hexdigest()
+            return self._digest()
+
+    def _digest(self):
+        if self._sha is None:
+            self._sha = _hash_file(self.path, self.committed)
+        return self._sha.hexdigest()
 
 
 class StreamStore:

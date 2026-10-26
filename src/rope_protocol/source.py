@@ -18,7 +18,8 @@ from .store import write_json_atomic
 
 log = logging.getLogger("rope.source")
 
-HEAD_BYTES = 4096
+#: Rounds of block repair per generation before the mismatch is reported to the application (spec 14.7).
+MAX_REPAIR_ROUNDS = 3
 
 
 class Rejected(Exception):
@@ -56,16 +57,29 @@ def _sha256_prefix(path, size):
     return h.hexdigest(), size - left
 
 
+def _differing_blocks(path, block_size, sums, hub_size):
+    """Ranges (off, end) of the blocks whose SHA-256 in the file differs from the hub's ``sums`` (spec 14.7)."""
+    out = []
+    with open(path, "rb") as f:
+        for i, digest in enumerate(sums):
+            off = i * block_size
+            end = min(off + block_size, hub_size)
+            f.seek(off)
+            if hashlib.sha256(f.read(end - off)).hexdigest() != digest:
+                out.append((off, end))
+    return out
+
+
 class SourceStream:
-    """State of one stream at the source. ``gen`` changes when the file is not a continuation (spec 14.4)."""
+    """State of one stream at the source. ``gen`` changes when the file is not a continuation (spec 14.4): when it
+    became shorter, or when the repair finds most of it changed. Bytes changed in place (e.g. a header updated at the
+    end of a recording) are repaired block by block instead (spec 14.7)."""
 
     def __init__(self, name, path, saved=None):
         self.name = name
         self.path = path
         saved = saved or {}
         self.gen = saved.get("gen", 1)
-        self.head_len = saved.get("head_len", 0)
-        self.head_sha = saved.get("head_sha", hashlib.sha256(b"").hexdigest())
         self.seen = saved.get("seen", 0)
         self.size = 0
         self.acked = 0
@@ -74,45 +88,52 @@ class SourceStream:
         self.end_sent = False
         self.result = None              # "ok" / "mismatch" from STREAM_CHECK
         self.checked = asyncio.Event()
+        self.reset_repair()
+        self.repair_rounds = 0          # repairs of this generation that reached the hub and still mismatched
+
+    def reset_repair(self):
+        self.hub_size = 0
+        self.block_size = None
+        self.sums = None                # {block index: sha256} while BLOCK_SUMS arrive
+        self.repairs = []               # [(off, end)] still to resend
+        self.repair_sent = False        # repair done, its STREAM_END not yet answered in this session
 
     def saved(self):
-        return dict(gen=self.gen, head_len=self.head_len, head_sha=self.head_sha, seen=self.seen)
+        return dict(gen=self.gen, seen=self.seen)
 
     def look(self):
-        """Read-only look at the file, safe in a worker thread: (size, sha256 of the first head_len bytes, sha256 of
-        the first HEAD_BYTES bytes) or None if the file does not exist (yet)."""
-        size = _size(self.path)
-        if size is None:
-            return None
-        head = _read(self.path, 0, max(self.head_len, min(size, HEAD_BYTES)))
-        return size, hashlib.sha256(head[:self.head_len]).hexdigest(), hashlib.sha256(head[:HEAD_BYTES]).hexdigest(), \
-            len(head[:HEAD_BYTES])
+        """Read-only look at the file, safe in a worker thread: its size, or None if it does not exist (yet)."""
+        return _size(self.path)
 
-    def apply(self, seen):
+    def new_generation(self, why):
+        log.warning("%s %s: new generation %d", self.name, why, self.gen + 1)
+        self.gen += 1
+        self.seen = 0
+        self.acked = self.sent = 0
+        self.final_size = None
+        self.end_sent = False
+        self.result = None
+        self.repair_rounds = 0
+        self.reset_repair()
+
+    def apply(self, size):
         """Apply a ``look()`` result in the event loop. Returns True if the persistent state changed."""
-        if seen is None:
+        if size is None:
             return False
-        size, old_head_sha, new_head_sha, new_head_len = seen
         changed = False
-        replaced = size < self.seen or (self.head_len and old_head_sha != self.head_sha)
-        if replaced:
-            log.warning("%s is not a continuation (shorter or beginning changed): new generation %d",
-                        self.name, self.gen + 1)
-            self.gen += 1
-            self.head_len, self.head_sha, self.seen = 0, hashlib.sha256(b"").hexdigest(), 0
-            self.acked = self.sent = 0
-            self.final_size = None
-            self.end_sent = False
-            self.result = None
-            changed = True
-        if self.head_len < HEAD_BYTES and new_head_len > self.head_len:
-            self.head_sha, self.head_len = new_head_sha, new_head_len
+        if size < self.seen:
+            self.new_generation("became shorter")
             changed = True
         if size > self.seen:
             self.seen = size
             changed = True
         self.size = size
         return changed
+
+    def sums_complete(self):
+        if self.sums is None or self.block_size is None:
+            return False
+        return len(self.sums) >= -(-self.hub_size // self.block_size)
 
 
 class Source:
@@ -211,6 +232,7 @@ class Source:
             for s in self.streams.values():
                 s.acked = s.sent = have.get((s.name, s.gen), 0)
                 s.end_sent = False
+                s.reset_repair()                    # a new final check starts the repair over
             self._inflight = []                     # [(stream, gen, end offset)]
             self.sessions += 1
             self.connected.set()
@@ -251,14 +273,47 @@ class Source:
                     self._wake.set()
             elif f.type == F.FrameType.STREAM_CHECK:
                 if s and s.gen == m["gen"]:
-                    s.result = m["result"]
-                    s.checked.set()
-                    if s.result != "ok":
-                        log.error("%s generation %d: final check at the hub failed (%s)", s.name, s.gen, s.result)
+                    if s.repair_sent:                # same session: the repair reached the hub (TCP keeps order)
+                        s.repair_rounds += 1
+                    if m["result"] == "ok" or s.repair_rounds >= MAX_REPAIR_ROUNDS:
+                        s.result = m["result"]
+                        s.checked.set()
+                        if s.result != "ok":
+                            log.error("%s generation %d: final check at the hub still fails after %d repairs",
+                                      s.name, s.gen, s.repair_rounds)
+                    else:
+                        log.info("%s generation %d: final check differs, comparing blocks", s.name, s.gen)
+                        s.reset_repair()
+                        s.hub_size = m["size"]
+                        s.sums = {}
+            elif f.type == F.FrameType.BLOCK_SUMS:
+                if s and s.gen == m["gen"] and s.sums is not None:
+                    s.block_size = m["block_size"]
+                    for i, digest in enumerate(m["sums"]):
+                        s.sums[m["first"] + i] = digest
+                    self._wake.set()
             elif f.type == F.FrameType.ERROR:
                 raise ConnectionError("hub reported %s: %s" % (m["code"], m["text"]))
             elif f.type == F.FrameType.BYE:
                 raise ConnectionError("hub closed the session: %s" % m["reason"])
+
+    async def _compare(self, s):
+        """All BLOCK_SUMS of a failed final check arrived: find the differing blocks (spec 14.7)."""
+        count = -(-s.hub_size // s.block_size)
+        sums = [s.sums[i] for i in range(count)]
+        s.sums = None
+        diff = await asyncio.to_thread(_differing_blocks, s.path, s.block_size, sums, s.hub_size)
+        if count and len(diff) * 2 > count:
+            # most of it differs: a different file, not an edit - keep the hub's version and start over
+            s.new_generation("changed in %d of %d blocks" % (len(diff), count))
+            await asyncio.to_thread(write_json_atomic, self._state_path,
+                                    {n: x.saved() for n, x in self.streams.items()})
+            return
+        log.info("%s generation %d: resending %d of %d blocks", s.name, s.gen, len(diff), count)
+        s.repairs = diff
+        if not diff:                                # blocks agree (file changed meanwhile?): check again
+            s.repair_sent = True
+            s.end_sent = False
 
     async def _send(self, ch):
         while not ch.closed:
@@ -270,6 +325,25 @@ class Source:
                                             {n: x.saved() for n, x in self.streams.items()})
                 if s.final_size == -1:
                     s.final_size = max(s.size, s.sent)     # never less than what the hub may already hold
+                if s.sums_complete():
+                    await self._compare(s)
+                while s.repairs and not ch.closed:          # resend the differing blocks, overwriting at the hub
+                    off, end = s.repairs[0]
+                    data = await asyncio.to_thread(_read, s.path, off, min(self.segment_bytes, end - off))
+                    if not data:
+                        s.repairs.clear()                   # file became shorter: apply() starts a new generation
+                        break
+                    frame = await asyncio.to_thread(F.segment, s.name, s.gen, off, data, now_ms(),
+                                                    self.zlib_level, repair=True)
+                    await ch.send(frame)
+                    progressed = True
+                    if off + len(data) >= end:
+                        s.repairs.pop(0)
+                        if not s.repairs:
+                            s.repair_sent = True
+                            s.end_sent = False              # check again
+                    else:
+                        s.repairs[0] = (off + len(data), end)
                 limit = s.final_size if s.final_size is not None else s.size
                 while len(self._inflight) < self.window and s.sent < limit:
                     n = min(self.segment_bytes, limit - s.sent)
@@ -282,7 +356,8 @@ class Source:
                     s.sent += len(data)
                     self._inflight.append((s.name, s.gen, s.sent))
                     progressed = True
-                if s.final_size is not None and not s.end_sent and s.result != "ok" and s.acked >= s.final_size:
+                if s.final_size is not None and not s.end_sent and s.result != "ok" and s.acked >= s.final_size \
+                        and s.sums is None and not s.repairs:
                     digest, n = await asyncio.to_thread(_sha256_prefix, s.path, s.final_size)
                     await ch.send(F.Frame(F.FrameType.STREAM_END, dict(stream=s.name, gen=s.gen, size=n,
                                                                        sha256=digest)))

@@ -19,14 +19,16 @@ _(see `docs/ideas.md`)_
       defaults (spec §9).
 - [ ] Resolve the open points listed at the end of `docs/spec.md`.
 
+- [ ] **Relaying to consumers:** the hub sends stored streams on to consumers, resumable in the same way.
+
 ## In progress
-- [ ] **Core: streams from one source to the hub** (`feature/core-stream`): durable store (fsync before ACK, crash
-      cut-back), hub with participant list and plain-language REJECT, source following growing files without locks,
-      resume from the committed offset, generations for replaced files, final SHA-256 check. Tests over the link
-      simulator: disconnects, blackouts, hub and source restarts. Still missing: per-block repair after a mismatch
-      (`BLOCK_SUMS`), relaying to consumers.
+- [ ] **Block repair after a mismatch** (`feature/block-repair`, spec §14.7): `BLOCK_SUMS`, repair segments, new
+      generation only for shorter or mostly different files, at most 3 rounds.
 
 ## Done
+- 2026-10-26 Core: streams from one source to the hub (#7): durable store (fsync before ACK, crash cut-back), hub with
+  participant list and plain-language REJECT, source following growing files without locks, resume from the
+  committed offset, generations, final SHA-256 check; tests over the link simulator.
 - 2026-10-26 Wire format draft 1: spec §14 and frame codec `rope_protocol.frames` with test vectors (#5); default
   port 47310 and link simulator `rope_protocol.linksim`, the first part of the test bench (#6).
 - 2026-10-19 Repository created: specification draft 0, licence, contribution guidelines, CI (pyflakes + pytest on

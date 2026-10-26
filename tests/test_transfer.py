@@ -31,17 +31,18 @@ async def _until(cond, timeout=20.0):
 class Bench:
     """Hub + link simulator + source with one or more files."""
 
-    def __init__(self, tmp, profile="lan", script=None, participants=None, operation="op-1"):
+    def __init__(self, tmp, profile="lan", script=None, participants=None, operation="op-1", **hub_kw):
         self.tmp = tmp
         self.profile = profile
         self.script = script
         self.participants = participants or {"source-1": "source"}
         self.operation = operation
         self.checked = []
+        self.hub_kw = dict(FAST, **hub_kw)
 
     async def start_hub(self):
         self.hub = await Hub(os.path.join(self.tmp, "hub"), self.participants, "op-1", port=0,
-                             on_stream_checked=lambda *a: self.checked.append(a), **FAST).start()
+                             on_stream_checked=lambda *a: self.checked.append(a), **self.hub_kw).start()
         return self.hub
 
     async def __aenter__(self):

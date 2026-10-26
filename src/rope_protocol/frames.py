@@ -241,6 +241,8 @@ def validate(frame):
                 raise FrameError("bad_frame", "%s must be a positive number" % k)
     if ftype in (FrameType.SEGMENT, FrameType.MESSAGE) and meta["enc"] not in ENCODINGS:
         raise FrameError("bad_frame", "unknown encoding %r" % (meta["enc"],))
+    if ftype is FrameType.SEGMENT and not isinstance(meta.get("repair", False), bool):
+        raise FrameError("bad_frame", "repair must be true or false")
     if ftype is FrameType.STREAM_END and not (isinstance(meta["sha256"], str) and _HEX64.match(meta["sha256"])):
         raise FrameError("bad_frame", "sha256 must be 64 lower-case hex characters")
     if ftype is FrameType.STREAM_CHECK and meta["result"] not in ("ok", "mismatch"):
