@@ -9,6 +9,9 @@ Each entry: date, status (**decided** / **proposed**), reason.
   `STREAM_CHECK`.
 - **Normal run: cut at every step; `ROPE_SOAK=1`: every fault at every step.** The full set takes several minutes,
   too long for every push, but belongs before a release.
+- **Restarts at every step (added later the same day).** The participant on the link or the hub stops just before
+  a frame and starts again on the same folders. Found: a connection accepted while the hub was stopping lived on;
+  the stopped hub kept serving it next to the new hub. A stopped hub now closes such connections at once.
 - **Unexpected errors end only the session, never the connection loop.** The bench found that a stray answer made
   the source's repair loop fail and the loop end silently - the source never connected again. Besides fixing the
   cause, the loop now logs any unexpected error and reconnects.

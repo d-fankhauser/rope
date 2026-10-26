@@ -70,6 +70,7 @@ class Hub:
         self._connections = set()     # every connection task, also those still greeting
         self._relays = set()          # StreamSender of every connected consumer
         self._mail = {}               # participant -> MessageSender of its current session
+        self._stopped = False
         self.sessions_started = 0
 
     async def start(self):
@@ -82,12 +83,17 @@ class Hub:
         return self
 
     async def stop(self):
+        # A connection accepted while stopping must not live on: a stopped hub would keep serving it, writing to the
+        # same folders as a new hub but unaware of its messages (found by the test bench, spec 13).
+        self._stopped = True
         if self._server:
             self._server.close()
-        tasks = list(self._connections)
-        for t in tasks:
-            t.cancel()
-        if tasks:
+        for _ in range(3):
+            tasks = list(self._connections)
+            if not tasks:
+                break
+            for t in tasks:
+                t.cancel()
             await asyncio.wait(tasks, timeout=5)
         if self._server:
             try:
@@ -102,6 +108,9 @@ class Hub:
         await self.stop()
 
     async def _accept(self, reader, writer):
+        if self._stopped:
+            writer.transport.abort()
+            return
         ch = Channel(reader, writer, send_timeout_s=self.timeout_s)
         participant = None
         me = asyncio.current_task()

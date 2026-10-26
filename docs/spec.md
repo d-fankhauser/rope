@@ -381,7 +381,7 @@ every message has arrived exactly once.
 
 **Faults at every step** (`tests/framefault.py`, `tests/test_faults.py`, implemented 2026-10-26). A frame-aware
 proxy injects exactly one fault at a chosen frame: connection cut before it, cut in the middle of it, the frame sent
-twice, or the frame damaged. The scenario uses every part of the protocol – greeting, segments, a header changed in
+twice, the frame damaged, or a restart of the participant on that link or of the hub just before the frame. The scenario uses every part of the protocol – greeting, segments, a header changed in
 place (final check, block sums, repair), relaying to a consumer, messages both ways and the delivery report – on the
 link of the source and on the link of a consumer.
 
@@ -390,6 +390,9 @@ link of the source and on the link of a consumer.
   `STREAM_CHECK` are hit.
 - The normal test run cuts the connection at every step and tries the other faults at a few steps. Setting
   `ROPE_SOAK=1` runs every fault at every step (several minutes); it belongs before every release.
+- A restart stops the program part the way a program ends (tasks cancelled, nothing more written) and starts a new
+  one on the same folders. A power cut, which can also lose what the operating system had not written yet, is not
+  simulated.
 - A duplicated frame inside one TCP connection does not happen on a real network (TCP removes duplicates). It is
   still tested because it shows how a participant reacts to a frame it did not expect.
 

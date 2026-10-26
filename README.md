@@ -117,7 +117,7 @@ ROPE's default port is **47310**; applications can override it.
 
 Every change runs `pyflakes` and `pytest` on Windows and Linux (Python 3.11–3.13). The test bench injects faults – a
 simulated radio link with blackouts and disconnects, restarts, and one fault at every step of the procedure (connection
-cut before or in the middle of a frame, frame duplicated or damaged) – and checks that every file arrives bit-for-bit
+cut before or in the middle of a frame, frame duplicated or damaged, participant or hub restarted) – and checks that every file arrives bit-for-bit
 identical and every message exactly once. The full set of faults at every step runs with:
 
 ```
