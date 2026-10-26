@@ -63,6 +63,13 @@ class Bench:
         return self.hub.store.get(participant, stream, gen)
 
 
+def _patch_file(path, off, data):
+    """Change bytes in place, as a recording program updating a header does."""
+    with open(path, "r+b") as f:
+        f.seek(off)
+        f.write(data)
+
+
 def _file(tmp, name, data):
     p = os.path.join(tmp, name)
     with open(p, "wb") as f:
