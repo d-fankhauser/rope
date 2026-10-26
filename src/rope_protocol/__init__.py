@@ -1,7 +1,8 @@
 """ROPE - Resumable Offline Protocol for Emergencies.
 
-Specification: docs/spec.md. Implemented so far: the frame codec of the wire format (``rope_protocol.frames``) and
-the link simulator for tests (``rope_protocol.linksim``).
+Specification: docs/spec.md. Implemented so far: the frame codec of the wire format (``rope_protocol.frames``), the
+link simulator for tests (``rope_protocol.linksim``) and streams from sources to a hub (``rope_protocol.source``,
+``rope_protocol.hub``, ``rope_protocol.store``).
 """
 
 __version__ = "0.0.1.dev0"

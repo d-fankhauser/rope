@@ -7,8 +7,6 @@ finished → **Done** (date, short description; details in `docs/`).
 _(see `docs/ideas.md`)_
 
 ## Backlog
-- [ ] **Core: single stream, one source, one hub** – send from committed offset, durable write + fsync before
-      acknowledgement, resume after reconnect, final checksum.
 - [ ] **Test bench** – the link simulator exists (bandwidth, latency, blackouts, disconnects). Still missing:
       disconnect at every protocol step, restarts, duplicate/damaged/reordered segments.
 - [ ] **Messages** with custody at the hub and per-recipient delivery state.
@@ -21,6 +19,11 @@ _(see `docs/ideas.md`)_
 - [ ] Resolve the open points listed at the end of `docs/spec.md`.
 
 ## In progress
+- [ ] **Core: streams from one source to the hub** (`feature/core-stream`): durable store (fsync before ACK, crash
+      cut-back), hub with participant list and plain-language REJECT, source following growing files without locks,
+      resume from the committed offset, generations for replaced files, final SHA-256 check. Tests over the link
+      simulator: disconnects, blackouts, hub and source restarts. Still missing: per-block repair after a mismatch
+      (`BLOCK_SUMS`), relaying to consumers.
 - [ ] **Wire format draft 1** (`feature/wire-format`): spec §14 and frame codec `rope_protocol.frames` with tests;
       default port 47310; link simulator `rope_protocol.linksim` (first part of the test bench).
 

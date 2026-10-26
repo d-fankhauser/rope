@@ -136,6 +136,9 @@ All numbers are **proposed** starting values until measured.
 3. The hub checks the participant list and the version. On mismatch it replies with a plain-language reason and closes.
 4. The hub reports, per stream, its committed offset and, per message, what it already holds. The connection is then
    active.
+5. A participant has at most one session. A new greeting from the same participant replaces the old session
+   (**decided** with the first implementation). After a radio dropout, the hub often still holds the old, dead
+   connection; it must not block the new one.
 
 ### 8.2 Sending a stream
 
@@ -155,7 +158,7 @@ All numbers are **proposed** starting values until measured.
 ### 8.4 Completing a stream
 
 - When the stream is complete (application decides, e.g. file unchanged for 10 s), the source sends a checksum of the
-  whole stream.
+  whole stream. The final size is never smaller than what the source has already sent.
 - The receiver compares. On mismatch both sides exchange per-block checksums and only differing blocks are resent.
 - The stream is then marked complete and verified.
 

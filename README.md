@@ -16,8 +16,9 @@ ROPE transfers growing files and small messages between a small, closed group of
 networks – radio links, Wi-Fi, no internet. Like a rescue line it holds the connection even when it is pulled:
 an interruption costs time, never data.
 
-> **Status:** concept. The [specification](docs/spec.md) is draft 1 with a proposed wire format; only the frame codec
-> is implemented so far. Interfaces will change.
+> **Status:** early development. The [specification](docs/spec.md) is draft 1 with a proposed wire format. Streams
+> from sources to a hub work, including resume after disconnects and restarts; relaying to consumers, messages and
+> offline media are still to come. Interfaces will change.
 
 ## Why
 
@@ -100,7 +101,7 @@ ROPE's default port is **47310**; applications can override it.
 | `docs/ideas.md` | Ideas not yet planned |
 | `docs/images/` | Logo and symbol (SVG; light and dark variant) |
 | `TASKS.md` | Task board |
-| `src/rope_protocol/` | Package: frame codec of the wire format (`frames.py`), link simulator (`linksim.py`); the rest is to come |
+| `src/rope_protocol/` | Package: frame codec (`frames.py`), link simulator (`linksim.py`), durable store (`store.py`), hub (`hub.py`), source (`source.py`) |
 | `tests/` | Unit tests and, later, the fault-injection test bench |
 | `AGENTS.md` | Guidelines for contributors and coding agents |
 
