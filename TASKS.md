@@ -17,15 +17,16 @@ _(see `docs/ideas.md`)_
 - [ ] Resolve the open points listed at the end of `docs/spec.md`.
 
 
-- [ ] **Delivery report** to the sender of a message when every recipient has it (spec §8.5, open point).
 - [ ] **Offline media, second step:** block repair over media (two trips of the stick), help for clearing sticks
       (spec §8.6, open point).
 
 ## In progress
-- [ ] **Participant list** (`feature/participant-list`, spec §7): names, stream selection per consumer, every
-      participant learns the list.
+- [ ] **Delivery report** (`feature/delivery-report`, spec §8.5): `DELIVERY` / `DELIVERY_ACK`, over the network and
+      on media.
 
 ## Done
+- 2026-10-26 Participant list (#12, spec §7): names, stream selection per consumer, every participant learns the
+  list.
 - 2026-10-26 Offline media as a second path (#11, spec §8.6): bundles of wire-format frames on removable media,
   receipts back, mixed with the network.
 - 2026-10-26 Messages with custody (#10, spec §8.5): outbox, custody at the hub with state per recipient, inbox with

@@ -33,7 +33,8 @@ class Participant:
     session's tasks (receiving through ``_serve``). Runs until ``stop()``; reconnects forever with back-off.
 
     Every participant has a mailbox below ``mailbox_root`` (spec 8.5): ``send_message``, ``outbox``, ``inbox``,
-    ``message_body``; ``on_message(meta, body)`` is called once per new message.
+    ``message_body``; ``on_message(meta, body)`` is called once per new message, ``on_delivery(msg_id, report)``
+    once per new delivery report of a sent message (``outbox()`` holds the latest report).
 
     Offline media (spec 8.6): ``export_media`` writes a bundle for the hub, ``import_media`` reads the bundles the hub
     wrote for this participant. ``hub_id`` addresses the bundles; it is taken from every WELCOME.
@@ -45,13 +46,13 @@ class Participant:
     role = None
 
     def __init__(self, participant, operation, hub_host, hub_port=DEFAULT_PORT, timeout_s=10.0, backoff=(1.0, 10.0),
-                 mailbox_root=None, on_message=None, poll_s=0.5, state_dir=None):
+                 mailbox_root=None, on_message=None, poll_s=0.5, state_dir=None, on_delivery=None):
         self.participant = participant
         self._roster_path = os.path.join(state_dir, "participants.json") if state_dir else None
         self._roster_lock = threading.Lock()    # a greeting and a medium import may learn the list at the same time
         self._roster = self._load_roster()
         self.hub_id = "hub"
-        self.mailbox = Mailbox(mailbox_root, participant, on_message, poll_s)
+        self.mailbox = Mailbox(mailbox_root, participant, on_message, poll_s, on_delivery)
         self.operation = operation
         self.hub = (hub_host, hub_port)
         self.timeout_s = timeout_s
@@ -208,6 +209,7 @@ class Participant:
         try:
             receipts = box.select(lambda r: r["state"].get("box") == "in" and r["state"].get("via") == "media")
             frames = [F.Frame(F.FrameType.MESSAGE_ACK, {"id": r["meta"]["id"]}) for r in receipts]
+            frames += self.mailbox.report_acks()
             frames += [F.Frame(F.FrameType.ACK, dict(stream=s, gen=g, committed=c)) for s, g, c in acks]
             ok = all(w.add(f) for f in frames)
             ok = ok and media.add_messages(w, box, self.mailbox.pending())
@@ -248,6 +250,9 @@ class Participant:
                 if rec is not None and rec["state"].get("box") == "out":
                     box.update(m["id"], at_hub=True)
                     report.message_acks.append(m["id"])
+            elif f.type == F.FrameType.DELIVERY:
+                if self.mailbox.take_report(m):
+                    report.deliveries.append(m["id"])
             elif f.type == F.FrameType.ACK:
                 report.acks.append((m["stream"], m["gen"], m["committed"]))
             elif not self._media_frame(f, report, skipped):

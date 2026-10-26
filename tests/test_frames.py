@@ -30,6 +30,8 @@ EXAMPLES = {
     FrameType.BLOCK_SUMS: dict(stream="s", gen=2, block_size=1 << 20, first=0, sums=[SHA, SHA]),
     FrameType.MESSAGE: dict(id=ID, to=["hub", "tablet"], t=T, kind="note", len=0, crc=0, enc="none", **{"from": "source-1"}),
     FrameType.MESSAGE_ACK: dict(id=ID),
+    FrameType.DELIVERY: dict(id=ID, delivered=["tablet"], pending=["c-1"], unknown=[]),
+    FrameType.DELIVERY_ACK: dict(id=ID, delivered=1),
 }
 
 

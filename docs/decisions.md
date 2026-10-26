@@ -2,6 +2,17 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – Delivery report to the sender of a message (proposed)
+- **Two new core frames, `DELIVERY` and `DELIVERY_ACK`** (wire format draft 1, changed before any release). Reusing
+  `MESSAGE_ACK` would mix up "I took custody of this message" with "I have your report".
+- **Report whenever a recipient is added**, not only when all have it: with a recipient that stays offline, the
+  sender still learns who already has the message.
+- **At once for unknown recipients** or when there is nobody to wait for, so a typo in an address shows up early.
+- **Acknowledged with a count:** the delivered list only grows, so a number is enough for the hub to know which
+  report arrived. Late or old reports (e.g. an old stick) never replace a newer one at the sender.
+- **Custody and "told" flag as for messages:** the report survives restarts on both sides and is told to the
+  application once.
+
 ### 2026-10-26 – Participant list with names and a stream selection per consumer (proposed)
 - **Names for the operator.** Identifiers are technical (`c-1`); people in the field need "Tablet" or "Analysis
   laptop" in rejections and in the application.

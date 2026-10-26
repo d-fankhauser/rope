@@ -211,7 +211,20 @@ All numbers are **proposed** starting values until measured.
   - Until it is acknowledged, a message is sent again after every reconnect.
   - At most 16 unacknowledged messages are in flight per connection.
   - The sender's outbox shows "at the hub" once the hub has taken custody.
-  - A report back to the sender when every recipient has the message is an open point.
+- **Delivery report to the sender (proposed, 2026-10-26):**
+  - The hub sends the sender a `DELIVERY` frame with the lists `delivered`, `pending` and `unknown`
+    (§14.3) whenever another recipient has acknowledged the message.
+  - It also sends one at once if there is nobody to wait for: all recipients unknown, or only the sender itself.
+    With unknown recipients next to known ones, a first report goes out at once as well, so the sender learns early
+    that some recipients do not exist.
+  - The sender stores the report durably, then answers `DELIVERY_ACK` with the number of recipients it now knows as
+    delivered. The hub keeps that number per message (`reported`) and sends again, after every reconnect, until a
+    report with all delivered recipients is acknowledged. A report that is older than the stored one (e.g. from
+    an old stick) is acknowledged but not stored.
+  - The application is told once per new report (`on_delivery`), with the same "told" flag as for received
+    messages: a report stored but not yet told is told when the next session starts. The outbox always holds the
+    latest report; the message reached everybody when `pending` is empty.
+  - The report is about custody at each recipient, not about a person reading the message.
 - **Telling the application:** the inbox records whether the application was told about a message. If the
   connection breaks between storing and telling, a resent copy is a duplicate and would not tell it again. So every
   untold message is told after each received message and when a session starts. The application is told at least
@@ -251,6 +264,8 @@ committed offset, ignore duplicates, report damaged items. Network and media may
   | hub → source | the hub's committed offsets of that source's streams as `ACK`, so that the next bundle of the source is smaller |
   | hub → consumer | the relayed streams (§7), from the offsets the consumer last reported in a bundle (from 0 if it never did); `STREAM_END` only for streams verified at the hub |
   | everybody, both ways | messages for the addressee not yet in custody there, and `MESSAGE_ACK` for messages received from the addressee |
+  | hub → participant | `DELIVERY` reports for the participant's messages it has not acknowledged yet (§8.5) |
+  | participant → hub | `DELIVERY_ACK` for every report it holds |
 
   Order inside a bundle: receipts, then messages, then streams. If the medium is too small (`max_bytes`), the export
   stops at a frame boundary and reports `complete: false`; the rest goes with the next bundle.
@@ -444,6 +459,8 @@ connection. Types `0x80`–`0xFF` are extensions: a receiver that does not know 
 | `0x15` | `BLOCK_SUMS` | receiver → sender | `stream`, `gen`, `block_size`, `first`, `sums` | – |
 | `0x20` | `MESSAGE` | both | `id`, `from`, `to`, `t`, `kind`, `len`, `crc`, `enc` | encoded body |
 | `0x21` | `MESSAGE_ACK` | both | `id` | – |
+| `0x22` | `DELIVERY` | hub → sender of a message | `id`, `delivered`, `pending`, `unknown` | – |
+| `0x23` | `DELIVERY_ACK` | sender of a message → hub | `id`, `delivered` | – |
 
 "Sender" and "receiver" are roles per stream: a source sends to the hub, and the hub sends to consumers.
 
@@ -478,6 +495,9 @@ Optional keys:
   same across retries and relays.
 - **Message kind** (`kind`): chosen by the application, 1–64 characters, same alphabet as identifiers. The core does
   not interpret it.
+- **Delivery report:** in `DELIVERY`, `delivered`, `pending` and `unknown` are lists of participant identifiers
+  (possibly empty). In `DELIVERY_ACK`, `delivered` is the number of recipients in the report the sender holds.
+  Added 2026-10-26.
 - **Role** (`role`): `source`, `consumer` or `recipient` (§7).
 - **Reject and error codes** (`code`): `unknown_participant`, `wrong_operation`, `version`, `role`, `busy`,
   `bad_frame`, `too_large`, `unknown_type`, `storage`, `internal`. `text` is plain language for the operator.
@@ -548,8 +568,7 @@ Status: **proposed** (block size, the half rule and the 3 rounds are assumptions
 - [ ] Bandwidth and typical outages of the radio links (how often, how long).
 - [ ] Catch-up order: current stream first, or strictly in order. First implementation: streams in name order,
       each from its committed offset.
-- [ ] Delivery report to the sender of a message (all recipients have it). First implementation: the sender sees
-      "at the hub"; the hub knows per recipient whether it was delivered.
+- [x] Delivery report to the sender of a message: `DELIVERY` / `DELIVERY_ACK` (§8.5, proposed).
 - [x] Which consumer receives which streams: a selection per consumer in the participant list (§7, proposed).
 - [ ] Hub failure: standby hub or offline media only.
 - [ ] Offline media: block repair over media (needs two trips of the stick), and whether the core should help the

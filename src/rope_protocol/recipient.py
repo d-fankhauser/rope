@@ -12,10 +12,10 @@ class Recipient(Participant):
     role = "recipient"
 
     def __init__(self, participant, operation, hub_host, root, hub_port=DEFAULT_PORT, timeout_s=10.0,
-                 backoff=(1.0, 10.0), on_message=None, poll_s=0.5):
+                 backoff=(1.0, 10.0), on_message=None, poll_s=0.5, on_delivery=None):
         super().__init__(participant, operation, hub_host, hub_port, timeout_s, backoff,
                          mailbox_root=os.path.join(root, "messages"), on_message=on_message, poll_s=poll_s,
-                         state_dir=root)
+                         state_dir=root, on_delivery=on_delivery)
 
     async def _active(self, ch, welcome):
         async def handle(f):
