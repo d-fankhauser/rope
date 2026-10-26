@@ -2,6 +2,14 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – Block repair over offline media (proposed)
+- **Same frames as on the network** (`STREAM_CHECK`, `BLOCK_SUMS`, `SEGMENT` `repair`, `STREAM_END`), carried in
+  bundles. Without it, a stream whose header changed after the data left would never be verified when only sticks
+  travel - neither at the hub nor at a consumer.
+- **The receiver asks in every bundle while its check fails**; the sender forgets a request once it wrote the
+  repair. A lost or damaged bundle therefore only costs another trip, and no side keeps state that could go stale.
+- **Half rule as on the network:** more than half of the blocks differ - a new generation instead of a repair.
+
 ### 2026-10-26 – stop() waits for disk writes still running (decided)
 - A cancelled session's write goes on in its worker thread. Without waiting, a new instance on the same folders could
   load a state in the middle of a write - for a stream even cut off bytes that the old write then committed.

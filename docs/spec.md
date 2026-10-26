@@ -286,9 +286,21 @@ committed offset, ignore duplicates, report damaged items. Network and media may
     (§8.5).
   - A received message is told to the application once, also if the same message arrives by medium and by network
     at the same time.
+- **Block repair over media (proposed, 2026-10-26):** the same frames as on the network (§14.7), one trip of the
+  medium per step.
+  1. A receiver whose final check failed (the hub for a source's stream, a consumer for a relayed stream) puts
+     `STREAM_CHECK` `mismatch` and the `BLOCK_SUMS` of what it holds into every bundle for the sender, as long as
+     the check fails.
+  2. The sender keeps a complete request durably (`media_repairs.json`). A request whose block sums arrived only in
+     part, e.g. from a damaged bundle, is dropped; the receiver asks again with its next bundle.
+  3. The sender's next bundle carries only the differing blocks as `SEGMENT` `repair` and then `STREAM_END` again;
+     afterwards it forgets the request. If that bundle is lost, the receiver still fails its check and asks again.
+  4. As on the network, a source starts a new generation instead if more than half of the blocks differ. The hub
+     repairs a consumer only from its own verified copy.
+  - Counting the trips: a header changed after the data left takes three trips to the hub (final check, request,
+    repair) and three more to a consumer.
+  - A verified stream ignores repair segments, so an old bundle imported again never changes it.
 - **Limits of the first implementation:**
-  - No block repair over media. Repair needs the receiver's block sums first, i.e. a round trip. A final check that
-    fails after an import is repaired over the network (§14.7).
   - A `STREAM_END` from a medium never overrides a stream that is already verified: the bundle may be older than a
     repair over the network.
   - A participant's message counts as "at the hub" only after a receipt from the hub (network or medium). Until then
@@ -371,6 +383,7 @@ VPN). The participant list prevents accidental mix-ups, not attacks.
 | Hub offline | no connection | participants keep collecting; offline media as fallback (§8.6) |
 | Damaged or cut-off medium | frame CRC, frame count | keep everything before the damage, report the rest |
 | Bundle without its predecessor | segment beyond the committed offset | skip that stream in the bundle, report the gap |
+| Final check fails after an import | final checksum | the next bundle asks for the differing blocks; the answer brings only those (§8.6) |
 
 ## 13. Test bench (proposed)
 
@@ -601,8 +614,8 @@ Status: **proposed** (block size, the half rule and the 3 rounds are assumptions
 - [x] Delivery report to the sender of a message: `DELIVERY` / `DELIVERY_ACK` (§8.5, proposed).
 - [x] Which consumer receives which streams: a selection per consumer in the participant list (§7, proposed).
 - [ ] Hub failure: standby hub or offline media only.
-- [ ] Offline media: block repair over media (needs two trips of the stick), and whether the core should help the
-      application decide when a bundle on a stick can be deleted.
+- [x] Offline media: block repair over media (§8.6, proposed).
+- [ ] Offline media: whether the core should help the application decide when a bundle on a stick can be deleted.
 
 **To measure**
 

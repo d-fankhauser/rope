@@ -127,7 +127,6 @@ ROPE_SOAK=1 python -m pytest tests/test_faults.py
 ## Limitations
 
 - Early development: streams, messages and offline media work. Interfaces and the wire format may still change.
-- No block repair over offline media: a stream that differs after an import is repaired over the network.
 - Not a general file synchronisation tool and not meant for the internet.
 - No encryption, no authentication beyond a participant list.
 - Not compatible with CFDP or DTN software; only the ideas are borrowed.

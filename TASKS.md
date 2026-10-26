@@ -16,13 +16,14 @@ _(see `docs/ideas.md`)_
 - [ ] Resolve the open points listed at the end of `docs/spec.md`.
 
 
-- [ ] **Offline media, second step:** block repair over media (two trips of the stick), help for clearing sticks
-      (spec §8.6, open point).
+- [ ] **Offline media:** help for clearing sticks (spec §8.6, open point).
 
 ## In progress
-- [ ] **stop() waits for disk writes** (`feature/stop-waits-for-writes`, spec §10).
+- [ ] **Block repair over offline media** (`feature/media-repair`, spec §8.6).
 
 ## Done
+- 2026-10-26 stop() waits for disk writes (#16, spec §10): writes counted from the hand-over and shielded from
+  cancellation.
 - 2026-10-26 Restarts at every step (#15, spec §13): participant or hub restarted just before every frame type and
   occurrence.
 - 2026-10-26 Test bench: a fault at every step (#14, spec §13): cut, cut mid-frame, duplicate, damage at every frame

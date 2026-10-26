@@ -67,6 +67,12 @@ class Consumer(Participant):
         """What this consumer holds: the hub's next bundle for it starts there."""
         return [(h["stream"], h["gen"], h["committed"]) for h in await self._have()]
 
+    async def _media_checks(self):
+        def failed():
+            return [(e["stream"], e["gen"], self.store.get(FROM_HUB, e["stream"], e["gen"]), self.receiver.block_size)
+                    for e in self.store.entries() if e["participant"] == FROM_HUB and e["verified"] == "mismatch"]
+        return await asyncio.to_thread(failed)
+
     def _media_frame(self, f, report, skipped):
         if f.type == F.FrameType.SEGMENT:
             media.import_segment(self.store, FROM_HUB, f, report, skipped)

@@ -23,7 +23,8 @@ import uuid
 
 from . import frames as F
 from .channel import now_ms
-from .sender import read_range, sha256_prefix
+from .receiver import SUMS_PER_FRAME
+from .sender import differing_blocks, read_range, sha256_prefix
 from .store import GapError, _fsync_dir, write_json_atomic
 
 #: Format of the bundle folder (not the wire format, which is the frames' version byte).
@@ -55,6 +56,8 @@ class ExportReport:
         self.segments = 0
         self.stream_bytes = 0
         self.messages = 0
+        self.repair_requests = 0          # streams for which this bundle asks the sender to repair
+        self.repair_bytes = 0             # bytes resent as repair
         self.complete = True
 
     def __repr__(self):
@@ -78,6 +81,7 @@ class ImportReport:
         self.messages = []                  # [meta] new messages taken into custody
         self.acks = []                      # [(stream, gen, committed)] the sender holds
         self.message_acks = []              # [id] the sender holds
+        self.repair_requests = {}           # {(stream, gen): {size, block_size, sums}} a receiver asks to repair
         self.deliveries = []                # [id] of own messages with a new delivery report
         self.delivery_acks = []             # [id] of delivery reports the sender holds
         self.problems = []
@@ -285,6 +289,74 @@ def add_messages(writer, store, records, zlib_level=1):
     return True
 
 
+def add_check_request(writer, name, gen, rs, block_size):
+    """Ask the sender to repair a stream whose final check failed here (spec 8.6): STREAM_CHECK ``mismatch`` and the
+    BLOCK_SUMS of what is stored, the same frames as on the network (spec 14.7). False when the medium is full."""
+    if not writer.add(F.Frame(F.FrameType.STREAM_CHECK, dict(stream=name, gen=gen, result="mismatch",
+                                                             size=rs.committed))):
+        return False
+    sums = rs.block_sums(block_size)
+    for first in range(0, max(len(sums), 1), SUMS_PER_FRAME):
+        if not writer.add(F.Frame(F.FrameType.BLOCK_SUMS, dict(stream=name, gen=gen, block_size=block_size,
+                                                               first=first, sums=sums[first:first + SUMS_PER_FRAME]))):
+            return False
+    writer.report.repair_requests += 1
+    return True
+
+
+def collect_repair_frame(f, requests):
+    """Collect STREAM_CHECK ``mismatch`` and BLOCK_SUMS from a bundle into ``requests``. True if ``f`` was one."""
+    m = f.meta
+    key = (m["stream"], m["gen"])
+    if f.type == F.FrameType.STREAM_CHECK:
+        if m["result"] == "mismatch":
+            requests[key] = dict(size=m["size"], block_size=None, sums={})
+        return True
+    if f.type == F.FrameType.BLOCK_SUMS:
+        req = requests.get(key)
+        if req is not None:
+            req["block_size"] = m["block_size"]
+            for i, digest in enumerate(m["sums"]):
+                req["sums"][m["first"] + i] = digest
+        return True
+    return False
+
+
+def complete_requests(requests):
+    """The requests whose block sums all arrived, as {"<stream>\\0<gen>": {size, block_size, sums: [...]}} for a JSON
+    file; a request cut off by damage is dropped (the receiver asks again with its next bundle)."""
+    out = {}
+    for (stream, gen), req in requests.items():
+        if req["block_size"] is None:
+            continue
+        count = -(-req["size"] // req["block_size"])
+        if all(i in req["sums"] for i in range(count)):
+            out["%s\0%d" % (stream, gen)] = dict(size=req["size"], block_size=req["block_size"],
+                                                  sums=[req["sums"][i] for i in range(count)])
+    return out
+
+
+def split_key(key):
+    stream, _, gen = key.rpartition("\0")
+    return stream, int(gen)
+
+
+def add_repair(writer, name, gen, path, req, zlib_level=1):
+    """Resend the blocks of the file that differ from the receiver's sums as SEGMENT ``repair`` (spec 14.7). Returns
+    (ok, differing blocks, all blocks); ok is False when the medium is full."""
+    diff = differing_blocks(path, req["block_size"], req["sums"], req["size"])
+    for off, end in diff:
+        while off < end:
+            data = read_range(path, off, min(SEGMENT_BYTES, end - off))
+            if not data:
+                break
+            if not writer.add(F.segment(name, gen, off, data, now_ms(), zlib_level, repair=True)):
+                return False, len(diff), len(req["sums"])
+            writer.report.repair_bytes += len(data)
+            off += len(data)
+    return True, len(diff), len(req["sums"])
+
+
 # --- building blocks for importers ------------------------------------------------------------------------------------
 
 def import_segment(store, owner, f, report, skipped):
@@ -304,7 +376,9 @@ def import_segment(store, owner, f, report, skipped):
     rs = store.get(owner, m["stream"], m["gen"])
     before = rs.committed
     try:
-        committed = rs.write(m["off"], data)            # never with repair: block repair needs the network
+        # a repair segment overwrites below the committed offset (spec 14.7); a verified stream ignores it, so an
+        # old bundle never changes a stream that passed its final check
+        committed = rs.write(m["off"], data, m.get("repair") is True)
     except GapError as e:
         report.problems.append("stream %s generation %d: bytes %d to %d are missing here; this bundle starts at "
                                "byte %d - an earlier bundle or the network must bring them first"
@@ -332,8 +406,9 @@ def import_stream_end(store, owner, f, report, skipped):
     result = rs.finish(m["size"], m["sha256"])
     report.checked.append((owner, m["stream"], m["gen"], result, rs.path))
     if result != "ok":
-        report.problems.append("stream %s generation %d differs from the sender's file; the block repair follows "
-                               "over the network (spec 14.7)" % (m["stream"], m["gen"]))
+        report.problems.append("stream %s generation %d differs from the sender's file; the next bundle asks the "
+                               "sender for the differing blocks (or the network repairs it, spec 14.7)"
+                               % (m["stream"], m["gen"]))
 
 
 def import_message(store, f, report, state, sender=None):
