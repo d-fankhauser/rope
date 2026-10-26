@@ -78,6 +78,8 @@ class ImportReport:
         self.messages = []                  # [meta] new messages taken into custody
         self.acks = []                      # [(stream, gen, committed)] the sender holds
         self.message_acks = []              # [id] the sender holds
+        self.deliveries = []                # [id] of own messages with a new delivery report
+        self.delivery_acks = []             # [id] of delivery reports the sender holds
         self.problems = []
 
     @property

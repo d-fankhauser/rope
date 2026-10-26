@@ -27,10 +27,11 @@ class Consumer(Participant):
     role = "consumer"
 
     def __init__(self, participant, operation, hub_host, root, hub_port=DEFAULT_PORT, timeout_s=10.0,
-                 backoff=(1.0, 10.0), block_size=BLOCK_SIZE, on_written=None, on_checked=None, on_message=None):
+                 backoff=(1.0, 10.0), block_size=BLOCK_SIZE, on_written=None, on_checked=None, on_message=None,
+                 on_delivery=None):
         super().__init__(participant, operation, hub_host, hub_port, timeout_s, backoff,
                          mailbox_root=os.path.join(root, "messages"), on_message=on_message,
-                         state_dir=root)
+                         state_dir=root, on_delivery=on_delivery)
         self.store = StreamStore(root)
         self.on_written = on_written
         self.on_checked = on_checked

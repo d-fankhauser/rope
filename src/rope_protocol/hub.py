@@ -136,6 +136,8 @@ class Hub:
                 timeout_s=self.timeout_s, have=have, participants=self.participant_list())))
             mail = M.MessageSender(self.messages, lambda: self._mail_for(participant),
                                    lambda msg_id: self._delivered(msg_id, participant), self.poll_s, self.zlib_level)
+            mail.reports = M.ReportSender(lambda: self._reports_for(participant),
+                                          lambda msg_id, n: self._report_acked(msg_id, n, participant), self.poll_s)
             self._mail[participant] = mail
             try:
                 serve = dict(consumer=self._serve_consumer, source=self._serve_source,
@@ -188,8 +190,10 @@ class Hub:
         async def both(f):
             return await self._mail_frame(ch, participant, mail, f) or await handle(f)
         mail.start_session()
+        mail.reports.start_session()
         tasks = [asyncio.ensure_future(ch.heartbeat(self.heartbeat_s)),
                  asyncio.ensure_future(mail.run(ch)),
+                 asyncio.ensure_future(mail.reports.run(ch)),
                  asyncio.ensure_future(serve_frames(ch, self.timeout_s, both, self.participants[participant]))] \
             + list(tasks)
         try:
@@ -268,6 +272,10 @@ class Hub:
             return True
         if f.type == F.FrameType.MESSAGE_ACK:
             await mail.handle_ack(f.meta["id"])
+            self._wake_report(f.meta["id"])
+            return True
+        if f.type == F.FrameType.DELIVERY_ACK:
+            await mail.reports.handle_ack(f.meta["id"], f.meta["delivered"])
             return True
         return False
 
@@ -283,6 +291,8 @@ class Hub:
         for p in state["pending"]:
             if p in self._mail:
                 self._mail[p].wake.set()
+        if M.needs_report(state):
+            self._wake_report(meta["id"])
 
     def _mail_for(self, participant):
         return self.messages.select(lambda r: participant in r["state"].get("pending", ()))
@@ -293,6 +303,27 @@ class Hub:
                 state["pending"].remove(participant)
                 state["delivered"].append(participant)
         self.messages.modify(msg_id, change)
+
+    # --- delivery reports to the sender (spec 8.5) ------------------------------------------------------------------
+    def _reports_for(self, participant):
+        """Records of the messages from ``participant`` whose delivery report it has not acknowledged yet."""
+        return self.messages.select(lambda r: r["meta"]["from"] == participant and M.needs_report(r["state"]))
+
+    def _report_acked(self, msg_id, delivered, participant):
+        rec = self.messages.get(msg_id)
+        if rec is None or rec["meta"]["from"] != participant:
+            return
+
+        def change(state):
+            state["reported"] = max(state.get("reported", -1), delivered)
+        self.messages.modify(msg_id, change)
+
+    def _wake_report(self, msg_id):
+        """In the event loop: the report of ``msg_id`` may have changed - wake its sender's session, if connected."""
+        rec = self.messages.get(msg_id)
+        mail = rec and self._mail.get(rec["meta"]["from"])
+        if mail is not None:
+            mail.reports.wake.set()
 
     def message_status(self, msg_id):
         """{pending, delivered, unknown} of a message the hub holds, or None."""
@@ -314,6 +345,8 @@ class Hub:
                     self.on_stream_checked(owner, stream, gen, result, data_path)
             for meta in report.messages:
                 self._new_message(meta, self.messages.get(meta["id"])["state"])
+            for msg_id in report.message_acks:
+                self._wake_report(msg_id)
             if report.problems:
                 log.warning("bundle %s: %s", path, "; ".join(report.problems))
             reports.append(report)
@@ -346,6 +379,9 @@ class Hub:
             elif f.type == F.FrameType.MESSAGE_ACK:
                 self._delivered(m["id"], sender)
                 report.message_acks.append(m["id"])
+            elif f.type == F.FrameType.DELIVERY_ACK:
+                self._report_acked(m["id"], m["delivered"], sender)
+                report.delivery_acks.append(m["id"])
             elif f.type == F.FrameType.ACK and role == "consumer":
                 report.acks.append((m["stream"], m["gen"], m["committed"]))
             else:
@@ -355,8 +391,8 @@ class Hub:
         return report
 
     async def export_media(self, medium, participant, max_bytes=None):
-        """Write a bundle for ``participant`` to the folder ``medium``: messages pending for it, receipts for the
-        messages it sent, and what the role needs (a source: what the hub holds of its streams; a consumer: the
+        """Write a bundle for ``participant`` to the folder ``medium``: messages pending for it, receipts and delivery
+        reports for the messages it sent, and what the role needs (a source: what the hub holds of its streams; a consumer: the
         relayed streams from what it last reported in a bundle, final checks only for streams verified here).
         ``max_bytes`` limits the bundle; the report says whether everything fitted. Returns an ExportReport."""
         role = self.participants.get(participant)
@@ -369,6 +405,7 @@ class Hub:
         try:
             receipts = self.messages.select(lambda r: r["meta"]["from"] == participant)
             frames = [F.Frame(F.FrameType.MESSAGE_ACK, {"id": r["meta"]["id"]}) for r in receipts]
+            frames += [M.report_frame(r) for r in self._reports_for(participant)]
             if role == "source":
                 frames += [F.Frame(F.FrameType.ACK, h) for h in self.store.have(participant)]
             ok = all(w.add(f) for f in frames)

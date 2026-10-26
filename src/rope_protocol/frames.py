@@ -43,6 +43,8 @@ class FrameType(enum.IntEnum):
     BLOCK_SUMS = 0x15
     MESSAGE = 0x20
     MESSAGE_ACK = 0x21
+    DELIVERY = 0x22
+    DELIVERY_ACK = 0x23
 
 
 #: Required meta keys per core frame type (spec 14.3). Unknown keys are allowed and ignored.
@@ -61,6 +63,8 @@ REQUIRED = {
     FrameType.BLOCK_SUMS: ("stream", "gen", "block_size", "first", "sums"),
     FrameType.MESSAGE: ("id", "from", "to", "t", "kind", "len", "crc", "enc"),
     FrameType.MESSAGE_ACK: ("id",),
+    FrameType.DELIVERY: ("id", "delivered", "pending", "unknown"),
+    FrameType.DELIVERY_ACK: ("id", "delivered"),
 }
 
 ROLES = ("source", "consumer", "recipient")
@@ -258,13 +262,19 @@ def validate(frame):
             raise FrameError("bad_frame", "block_size must be an integer >= 1")
         if not (isinstance(meta["sums"], list) and all(isinstance(s, str) and _HEX64.match(s) for s in meta["sums"])):
             raise FrameError("bad_frame", "sums must be SHA-256 hex digests")
-    if ftype in (FrameType.MESSAGE, FrameType.MESSAGE_ACK) and not (isinstance(meta["id"], str) and _HEX32.match(meta["id"])):
+    if ftype in (FrameType.MESSAGE, FrameType.MESSAGE_ACK, FrameType.DELIVERY, FrameType.DELIVERY_ACK) and not (isinstance(meta["id"], str) and _HEX32.match(meta["id"])):
         raise FrameError("bad_frame", "message id must be 32 lower-case hex characters")
     if ftype is FrameType.MESSAGE:
         if not (isinstance(meta["to"], list) and meta["to"] and all(isinstance(t, str) and _IDENTIFIER.match(t) for t in meta["to"])):
             raise FrameError("bad_frame", "to must be a non-empty list of identifiers")
         if not (isinstance(meta["kind"], str) and _IDENTIFIER.match(meta["kind"])):
             raise FrameError("bad_frame", "kind is not a valid identifier")
+    if ftype is FrameType.DELIVERY:
+        for k in ("delivered", "pending", "unknown"):
+            if not (isinstance(meta[k], list) and all(isinstance(t, str) and _IDENTIFIER.match(t) for t in meta[k])):
+                raise FrameError("bad_frame", "%s must be a list of identifiers" % k)
+    if ftype is FrameType.DELIVERY_ACK and not _is_int(meta["delivered"]):
+        raise FrameError("bad_frame", "delivered must be a non-negative integer")
     if ftype in (FrameType.REJECT, FrameType.ERROR) and meta["code"] not in CODES:
         # unknown codes from newer versions are allowed but must be strings
         if not isinstance(meta["code"], str):

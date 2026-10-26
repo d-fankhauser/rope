@@ -31,7 +31,8 @@ transfer).
 ## Key properties
 
 - **Resumable** – after any interruption, transfer continues from the last durably stored byte, never from zero.
-- **Custody** – a receiver acknowledges only after the data is on disk (flush + fsync).
+- **Custody** – a receiver acknowledges only after the data is on disk (flush + fsync). The sender of a message
+  learns which recipients have it.
 - **End-to-end verified** – checksums per segment and per complete file; bit-for-bit identical results. If bytes
   changed after they were sent (e.g. a header updated at the end of a recording), only the differing blocks travel
   again.

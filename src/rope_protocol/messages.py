@@ -3,6 +3,10 @@
 Every holder stores a message durably before it acknowledges it: the sender in its outbox, the hub, each recipient
 in its inbox. Until acknowledged, a message is sent again after every reconnect; duplicates are recognised by id.
 
+Delivery report: the hub tells the sender which recipients have a message (``DELIVERY``) whenever that grows, and
+once at the start if some recipients are unknown or there is nobody to deliver to. The sender stores the report
+durably and acknowledges it (``DELIVERY_ACK`` with the number of recipients it now knows as delivered).
+
 Layout below ``root``::
 
     <id>.body    the raw body, written and synced first
@@ -132,6 +136,51 @@ class MessageSender:
         raise ConnectionError("connection closed")
 
 
+def needs_report(state):
+    """True if the hub owes the sender a delivery report for a message with this custody state."""
+    n = len(state.get("delivered", ()))
+    return n > state.get("reported", -1) and (n > 0 or bool(state.get("unknown")) or not state.get("pending"))
+
+
+def report_frame(rec):
+    st = rec["state"]
+    return F.Frame(F.FrameType.DELIVERY, dict(id=rec["meta"]["id"], delivered=list(st["delivered"]),
+                                              pending=list(st["pending"]), unknown=list(st["unknown"])))
+
+
+class ReportSender:
+    """At the hub: sends the delivery reports ``pending()`` returns to the sender of the messages over one connection
+    and records acknowledgements with ``on_acked(msg_id, delivered)`` (called in a worker thread)."""
+
+    def __init__(self, pending, on_acked, poll_s=0.5):
+        self.pending = pending
+        self.on_acked = on_acked
+        self.poll_s = poll_s
+        self.wake = Wakeup()
+        self._inflight = set()
+
+    def start_session(self):
+        self._inflight = set()
+
+    async def handle_ack(self, msg_id, delivered):
+        self._inflight.discard(msg_id)
+        await asyncio.to_thread(self.on_acked, msg_id, delivered)
+        self.wake.set()
+
+    async def run(self, ch):
+        while not ch.closed:
+            self.wake.clear()
+            for rec in await asyncio.to_thread(self.pending):
+                if len(self._inflight) >= WINDOW:
+                    break
+                if rec["meta"]["id"] in self._inflight:
+                    continue
+                await ch.send(report_frame(rec))
+                self._inflight.add(rec["meta"]["id"])
+            await self.wake.wait(self.poll_s)
+        raise ConnectionError("connection closed")
+
+
 async def receive(store, ch, f, state):
     """Store an incoming MESSAGE durably (new ids only), then acknowledge. Returns (meta, body) if it was new."""
     body = F.message_body(f)                            # FrameError on damage -> ERROR, connection closed
@@ -142,16 +191,19 @@ async def receive(store, ch, f, state):
 
 
 class Mailbox:
-    """Outbox and inbox of a participant (spec 8.5). ``on_message(meta, body)`` is called once per new message.
+    """Outbox and inbox of a participant (spec 8.5). ``on_message(meta, body)`` is called once per new message,
+    ``on_delivery(msg_id, report)`` once per new delivery report of a sent message (``report``: delivered, pending,
+    unknown - lists of participants).
 
     The inbox records whether the application was told about a message. If the connection breaks between storing
     and telling, the message is stored but untold; a resent copy is a duplicate. ``notify()`` therefore tells the
     application about every untold message - after each received message and when a session starts.
     """
 
-    def __init__(self, root, participant, on_message=None, poll_s=0.5):
+    def __init__(self, root, participant, on_message=None, poll_s=0.5, on_delivery=None):
         self.participant = participant
         self.on_message = on_message
+        self.on_delivery = on_delivery
         self.store = MessageStore(root)
         self.sender = MessageSender(self.store, self.pending, self._acked, poll_s)
         self._notify_lock = asyncio.Lock()     # a medium import and a network session may notify at the same time
@@ -167,8 +219,9 @@ class Mailbox:
         return meta["id"]
 
     def outbox(self):
-        """[{id, to, kind, t, at_hub}] of the messages sent from here."""
-        return [dict(rec["meta"], at_hub=rec["state"]["at_hub"])
+        """[{id, to, kind, t, at_hub, report}] of the messages sent from here. ``report`` is the hub's latest delivery
+        report ({delivered, pending, unknown}) or None; the message reached everybody when ``pending`` is empty."""
+        return [dict(rec["meta"], at_hub=rec["state"]["at_hub"], report=rec["state"].get("report"))
                 for rec in self.store.select(lambda r: r["state"].get("box") == "out")]
 
     def inbox(self):
@@ -187,6 +240,12 @@ class Mailbox:
                     body = await asyncio.to_thread(self.store.body, msg_id)
                     self.on_message(rec["meta"], body)
                 await asyncio.to_thread(self.store.update, msg_id, told=True)
+            for rec in self.store.select(lambda r: r["state"].get("box") == "out"
+                                         and r["state"].get("report_told") is False):
+                msg_id = rec["meta"]["id"]
+                if self.on_delivery:
+                    self.on_delivery(msg_id, rec["state"]["report"])
+                await asyncio.to_thread(self.store.update, msg_id, report_told=True)
 
     def pending(self):
         """Records of the outbox messages the hub has not taken into custody yet."""
@@ -194,6 +253,29 @@ class Mailbox:
 
     def _acked(self, msg_id):
         self.store.update(msg_id, at_hub=True)
+
+    def take_report(self, meta):
+        """Store a delivery report of an own message durably unless an equal or newer one is known (e.g. an old stick).
+        Returns True if it was new."""
+        rec = self.store.get(meta["id"])
+        if rec is None or rec["state"].get("box") != "out":
+            return False
+        new = {k: list(meta[k]) for k in ("delivered", "pending", "unknown")}
+        changed = []
+
+        def change(state):
+            old = state.get("report")
+            if old is None or len(new["delivered"]) > len(old["delivered"]):
+                state.update(report=new, report_told=False, at_hub=True)
+                changed.append(True)
+        self.store.modify(meta["id"], change)
+        return bool(changed)
+
+    def report_acks(self):
+        """DELIVERY_ACK frames for every report held (for a bundle: the hub ignores what it already knows)."""
+        return [F.Frame(F.FrameType.DELIVERY_ACK, dict(id=rec["meta"]["id"],
+                                                       delivered=len(rec["state"]["report"]["delivered"])))
+                for rec in self.store.select(lambda r: r["state"].get("box") == "out" and r["state"].get("report"))]
 
     async def handle(self, ch, f):
         """MESSAGE from the hub or MESSAGE_ACK for an own message. Returns False for other frames."""
@@ -203,6 +285,12 @@ class Mailbox:
             return True
         if f.type == F.FrameType.MESSAGE_ACK:
             await self.sender.handle_ack(f.meta["id"])
+            return True
+        if f.type == F.FrameType.DELIVERY:
+            await asyncio.to_thread(self.take_report, f.meta)
+            await ch.send(F.Frame(F.FrameType.DELIVERY_ACK, dict(id=f.meta["id"],
+                                                                 delivered=len(f.meta["delivered"]))))
+            await self.notify()
             return True
         return False
 
