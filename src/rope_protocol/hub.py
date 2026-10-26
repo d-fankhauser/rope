@@ -1,5 +1,5 @@
 """Hub: accepts participants from the participant list, stores the sources' streams durably and relays them to the
-consumers (spec 7, 8).
+consumers; takes custody of messages and delivers them to each recipient (spec 7, 8).
 
 To a consumer, the hub is a sender like a source is to the hub: same window, resume, final check and block repair
 (``rope_protocol.sender``). A relayed stream is named ``<source>/<stream>`` so that streams of different sources never
@@ -8,9 +8,11 @@ mix. The hub keeps no state per consumer: the consumer reports what it holds whe
 
 import asyncio
 import logging
+import os
 
 from . import PROTOCOL_VERSION, DEFAULT_PORT
 from . import frames as F
+from . import messages as M
 from .channel import Channel, now_ms, reap, serve_frames
 from .receiver import BLOCK_SIZE, StreamReceiver
 from .sender import OutStream, StreamSender
@@ -34,6 +36,7 @@ class Hub:
                  heartbeat_s=2.0, timeout_s=10.0, on_stream_checked=None, block_size=BLOCK_SIZE,
                  segment_bytes=256 * 1024, window=8, poll_s=0.5, zlib_level=1):
         self.store = StreamStore(root)
+        self.messages = M.MessageStore(os.path.join(root, "messages"))
         self.participants = dict(participants)
         self.operation = operation
         self.hub_id = hub_id
@@ -51,6 +54,7 @@ class Hub:
         self._sessions = {}           # participant -> task of its current session
         self._connections = set()     # every connection task, also those still greeting
         self._relays = set()          # StreamSender of every connected consumer
+        self._mail = {}               # participant -> MessageSender of its current session
         self.sessions_started = 0
 
     async def start(self):
@@ -115,10 +119,16 @@ class Hub:
             await ch.send(F.Frame(F.FrameType.WELCOME, dict(
                 version=ch.version, hub=self.hub_id, t=now_ms(), t_hello=m["t"], heartbeat_s=self.heartbeat_s,
                 timeout_s=self.timeout_s, have=have)))
-            if m["role"] == "consumer":
-                await self._serve_consumer(ch, participant, m["have"])
-            else:
-                await self._serve_source(ch, participant)
+            mail = M.MessageSender(self.messages, lambda: self._mail_for(participant),
+                                   lambda msg_id: self._delivered(msg_id, participant), self.poll_s, self.zlib_level)
+            self._mail[participant] = mail
+            try:
+                serve = dict(consumer=self._serve_consumer, source=self._serve_source,
+                             recipient=self._serve_recipient)[m["role"]]
+                await serve(ch, participant, m, mail)
+            finally:
+                if self._mail.get(participant) is mail:
+                    del self._mail[participant]
         except asyncio.CancelledError:
             ch.abort()
         except F.FrameError as e:
@@ -144,13 +154,20 @@ class Hub:
                                                                                      PROTOCOL_VERSION)
         if m["role"] != self.participants[p]:
             return "role", "%s greets as %s but is listed as %s" % (p, m["role"], self.participants[p])
-        if m["role"] not in ("source", "consumer"):
-            return "role", "this hub does not serve the role %s yet" % m["role"]
+        if m["role"] not in ("source", "consumer", "recipient"):
+            return "role", "this hub does not serve the role %s" % m["role"]
         return None
 
-    async def _run_session(self, ch, tasks):
-        """Run the session's tasks (plus heartbeat) until one ends; re-raise why it ended."""
-        tasks = [asyncio.ensure_future(ch.heartbeat(self.heartbeat_s))] + tasks
+    async def _run_session(self, ch, participant, mail, handle, tasks=()):
+        """Receive frames (messages first, then ``handle``) and run the session's tasks, plus heartbeat and message
+        delivery, until one ends; re-raise why it ended."""
+        async def both(f):
+            return await self._mail_frame(ch, participant, mail, f) or await handle(f)
+        mail.start_session()
+        tasks = [asyncio.ensure_future(ch.heartbeat(self.heartbeat_s)),
+                 asyncio.ensure_future(mail.run(ch)),
+                 asyncio.ensure_future(serve_frames(ch, self.timeout_s, both, self.participants[participant]))] \
+            + list(tasks)
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for t in done:
@@ -159,7 +176,7 @@ class Hub:
             await reap(tasks)
 
     # --- from a source -------------------------------------------------------------------------------------------
-    async def _serve_source(self, ch, participant):
+    async def _serve_source(self, ch, participant, hello, mail):
         receiver = StreamReceiver(self.store, participant, self.block_size, on_written=self._written,
                                   on_checked=self.on_stream_checked, me="hub")
 
@@ -171,14 +188,14 @@ class Hub:
                                        "including the source identifier and '/'" % (f.meta["stream"],
                                                                                    MAX_STREAM_BYTES))
             return await receiver.handle(ch, f)
-        await self._run_session(ch, [asyncio.ensure_future(serve_frames(ch, self.timeout_s, handle, "source"))])
+        await self._run_session(ch, participant, mail, handle)
 
     def _written(self, *_):
         for relay in self._relays:
             relay.wake.set()
 
     # --- to a consumer -------------------------------------------------------------------------------------------
-    async def _serve_consumer(self, ch, participant, consumer_have):
+    async def _serve_consumer(self, ch, participant, hello, mail):
         outs = {}                                       # (relayed name, gen) -> OutStream, this session only
 
         async def refresh():
@@ -197,14 +214,56 @@ class Hub:
 
         sender = StreamSender(refresh, self.segment_bytes, self.window, self.poll_s, self.zlib_level,
                               peer=participant)
-        have = {(h["stream"], h["gen"]): h["committed"] for h in consumer_have}
+        have = {(h["stream"], h["gen"]): h["committed"] for h in hello["have"]}
         sender.start_session(await refresh(), have)
 
         async def handle(f):
             return sender.handle(f)
         self._relays.add(sender)
         try:
-            await self._run_session(ch, [asyncio.ensure_future(serve_frames(ch, self.timeout_s, handle, "consumer")),
-                                         asyncio.ensure_future(sender.run(ch))])
+            await self._run_session(ch, participant, mail, handle, [asyncio.ensure_future(sender.run(ch))])
         finally:
             self._relays.discard(sender)
+
+    # --- recipients and messages ---------------------------------------------------------------------------------
+    async def _serve_recipient(self, ch, participant, hello, mail):
+        async def handle(f):
+            return False
+        await self._run_session(ch, participant, mail, handle)
+
+    async def _mail_frame(self, ch, participant, mail, f):
+        """MESSAGE from the participant (custody) or MESSAGE_ACK for a delivered one. False for other frames."""
+        if f.type == F.FrameType.MESSAGE:
+            if f.meta["from"] != participant:
+                raise F.FrameError("bad_frame", "%s sent a message from %s" % (participant, f.meta["from"]))
+            to = f.meta["to"]
+            known = [p for p in dict.fromkeys(to) if p in self.participants and p != participant]
+            unknown = [p for p in dict.fromkeys(to) if p not in self.participants]
+            got = await M.receive(self.messages, ch, f, dict(pending=known, delivered=[], unknown=unknown))
+            if got:
+                if unknown:
+                    log.warning("message %s from %s: %s not on the participant list, not delivered",
+                                f.meta["id"], participant, ", ".join(unknown))
+                for p in known:
+                    if p in self._mail:
+                        self._mail[p].wake.set()
+            return True
+        if f.type == F.FrameType.MESSAGE_ACK:
+            await mail.handle_ack(f.meta["id"])
+            return True
+        return False
+
+    def _mail_for(self, participant):
+        return self.messages.select(lambda r: participant in r["state"].get("pending", ()))
+
+    def _delivered(self, msg_id, participant):
+        def change(state):
+            if participant in state["pending"]:
+                state["pending"].remove(participant)
+                state["delivered"].append(participant)
+        self.messages.modify(msg_id, change)
+
+    def message_status(self, msg_id):
+        """{pending, delivered, unknown} of a message the hub holds, or None."""
+        rec = self.messages.get(msg_id)
+        return None if rec is None else rec["state"]

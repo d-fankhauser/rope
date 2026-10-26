@@ -28,7 +28,7 @@ EXAMPLES = {
     FrameType.STREAM_END: dict(stream="s", gen=2, size=0, sha256=SHA),
     FrameType.STREAM_CHECK: dict(stream="s", gen=2, result="mismatch", size=0),
     FrameType.BLOCK_SUMS: dict(stream="s", gen=2, block_size=1 << 20, first=0, sums=[SHA, SHA]),
-    FrameType.MESSAGE: dict(id=ID, to=["hub", "tablet"], t=T, kind="note", enc="none", **{"from": "source-1"}),
+    FrameType.MESSAGE: dict(id=ID, to=["hub", "tablet"], t=T, kind="note", len=0, crc=0, enc="none", **{"from": "source-1"}),
     FrameType.MESSAGE_ACK: dict(id=ID),
 }
 
@@ -155,6 +155,21 @@ def test_unknown_meta_keys_are_ignored():
     f = Frame(FrameType.HEARTBEAT, {"t": T, "future_key": {"a": 1}})
     (back,) = F.FrameDecoder().feed(F.encode(f))
     assert F.validate(back) is FrameType.HEARTBEAT
+
+
+def test_message_body_roundtrip_and_damage():
+    body = "Task: check position 7 again".encode("utf-8") * 20
+    msg = F.message(ID, "source-1", ["tablet"], T, "task", body)
+    (back,) = F.FrameDecoder().feed(F.encode(msg))
+    assert F.validate(back) is FrameType.MESSAGE and back.meta["from"] == "source-1"
+    assert back.meta["enc"] == "zlib" and F.message_body(back) == body
+    back.meta["crc"] ^= 1
+    with pytest.raises(FrameError):
+        F.message_body(back)
+    back.meta["crc"] ^= 1
+    back.meta["len"] = 10                               # a blob that expands beyond len is refused
+    with pytest.raises(FrameError):
+        F.message_body(back)
 
 
 def test_repair_flag_on_segments():

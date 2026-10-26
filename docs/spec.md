@@ -118,7 +118,7 @@ the hub.
 - **Roles (proposed):**
   - *source* – provides streams,
   - *consumer* – receives streams and may send messages,
-  - *recipient* – receives messages only.
+  - *recipient* – exchanges messages only, receives no streams.
 - **Need-to-know:** raw streams only to consumers; messages also to recipients.
 - **Several consumers:** a second consumer receives the same streams via the hub.
 - **Relaying (proposed, first implementation 2026-10-26):**
@@ -181,6 +181,28 @@ All numbers are **proposed** starting values until measured.
 - Each recipient acknowledges after storing it. The hub tracks "delivered" or "pending" per recipient.
 - Messages take priority over stream segments.
 - Duplicates are detected by id and shown only once.
+
+**First implementation (2026-10-26, proposed):**
+
+- **Who:** every role may send and receive messages. A *recipient* differs from the others only in that it
+  receives no streams.
+- **Sender check:** the hub accepts a message only if `from` is the participant on that connection. Otherwise it
+  answers `ERROR` `bad_frame`.
+- **Unknown recipients:** recipients not on the participant list are recorded as "unknown" and logged. The
+  message is delivered to the known ones.
+- **Custody at every step:** a holder writes the body, then the meta, both durably. Only then does it send
+  `MESSAGE_ACK`.
+  - Until it is acknowledged, a message is sent again after every reconnect.
+  - At most 16 unacknowledged messages are in flight per connection.
+  - The sender's outbox shows "at the hub" once the hub has taken custody.
+  - A report back to the sender when every recipient has the message is an open point.
+- **Telling the application:** the inbox records whether the application was told about a message. If the
+  connection breaks between storing and telling, a resent copy is a duplicate and would not tell it again. So every
+  untold message is told after each received message and when a session starts. The application is told at least
+  once; in practice exactly once (it is told twice only if the program stops between telling and recording that).
+- **Priority:** messages travel in their own task on the same connection. A message waits behind at most the
+  segment being written, not behind the stream backlog. The test bench checks this on a simulated 1 MB/s link
+  with a 3 MB file in progress: the message must arrive within 2 s, while the file is still on its way.
 
 ### 8.6 Offline media as a second path
 
@@ -349,7 +371,7 @@ connection. Types `0x80`–`0xFF` are extensions: a receiver that does not know 
 | `0x13` | `STREAM_END` | sender → receiver | `stream`, `gen`, `size`, `sha256` | – |
 | `0x14` | `STREAM_CHECK` | receiver → sender | `stream`, `gen`, `result`, `size` | – |
 | `0x15` | `BLOCK_SUMS` | receiver → sender | `stream`, `gen`, `block_size`, `first`, `sums` | – |
-| `0x20` | `MESSAGE` | both | `id`, `from`, `to`, `t`, `kind`, `enc` | encoded body |
+| `0x20` | `MESSAGE` | both | `id`, `from`, `to`, `t`, `kind`, `len`, `crc`, `enc` | encoded body |
 | `0x21` | `MESSAGE_ACK` | both | `id` | – |
 
 "Sender" and "receiver" are roles per stream: a source sends to the hub, and the hub sends to consumers.
@@ -369,8 +391,10 @@ Optional keys: `SEGMENT` may carry `repair` (`true` or `false`, default `false`,
   Receivers keep every generation separately and never overwrite one with another. Bytes changed in place within a
   generation (e.g. a header updated at the end of a recording) are not a new generation; the block repair fixes them.
 - **Offsets and lengths** (`off`, `len`, `size`, `committed`): bytes of the raw (decoded) stream.
-- **Checksums:** `crc` is the CRC-32 of the raw segment data after decoding; `sha256` and `sums` are SHA-256 digests in
-  lower-case hex.
+- **Checksums:** `crc` is the CRC-32 of the raw segment data or message body after decoding; `sha256` and `sums` are
+  SHA-256 digests in lower-case hex.
+- **Message length** (`len`): bytes of the raw body, at most 1 MiB. Added on 2026-10-26: without it, a receiver could
+  not bound the decompression of a `zlib` body (the same rule as for segments, see Encoding).
 - **Encoding** (`enc`): `none` or `zlib` (§10: low level). The sender uses `zlib` only when it makes the blob smaller.
   A `zlib` blob is exactly one complete zlib stream. The receiver decodes at most `len` + 1 bytes and rejects anything
   that is not exactly `len` bytes, so a small blob can never expand into a large amount of memory.
@@ -448,6 +472,8 @@ Status: **proposed** (block size, the half rule and the 3 rounds are assumptions
 - [ ] Bandwidth and typical outages of the radio links (how often, how long).
 - [ ] Catch-up order: current stream first, or strictly in order. First implementation: streams in name order,
       each from its committed offset.
+- [ ] Delivery report to the sender of a message (all recipients have it). First implementation: the sender sees
+      "at the hub"; the hub knows per recipient whether it was delivered.
 - [ ] Which consumer receives which streams. First implementation: every consumer receives every stream of the
       operation (participant list §7 may later name what each participant receives).
 - [ ] Hub failure: standby hub or offline media only.

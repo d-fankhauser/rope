@@ -7,7 +7,8 @@ import random
 
 from . import PROTOCOL_VERSION, DEFAULT_PORT
 from . import frames as F
-from .channel import Channel, now_ms, reap
+from .channel import Channel, now_ms, reap, serve_frames
+from .messages import Mailbox
 
 log = logging.getLogger("rope.participant")
 
@@ -23,12 +24,18 @@ class Rejected(Exception):
 
 class Participant:
     """Base class. Subclasses set ``role`` and implement ``_have()`` and ``_active(ch, welcome)``, which returns the
-    session's tasks. Runs until ``stop()``; reconnects forever with back-off."""
+    session's tasks (receiving through ``_serve``). Runs until ``stop()``; reconnects forever with back-off.
+
+    Every participant has a mailbox below ``mailbox_root`` (spec 8.5): ``send_message``, ``outbox``, ``inbox``,
+    ``message_body``; ``on_message(meta, body)`` is called once per new message.
+    """
 
     role = None
 
-    def __init__(self, participant, operation, hub_host, hub_port=DEFAULT_PORT, timeout_s=10.0, backoff=(1.0, 10.0)):
+    def __init__(self, participant, operation, hub_host, hub_port=DEFAULT_PORT, timeout_s=10.0, backoff=(1.0, 10.0),
+                 mailbox_root=None, on_message=None, poll_s=0.5):
         self.participant = participant
+        self.mailbox = Mailbox(mailbox_root, participant, on_message, poll_s)
         self.operation = operation
         self.hub = (hub_host, hub_port)
         self.timeout_s = timeout_s
@@ -40,12 +47,28 @@ class Participant:
         self._stop = asyncio.Event()
         self._task = None
 
+    # --- messages ------------------------------------------------------------------------------------------------
+    def send_message(self, to, kind, body):
+        """Store a message for the participants ``to`` durably and return its id; it leaves when connected."""
+        return self.mailbox.send(to, kind, body)
+
+    def outbox(self):
+        return self.mailbox.outbox()
+
+    def inbox(self):
+        return self.mailbox.inbox()
+
+    def message_body(self, msg_id):
+        return self.mailbox.body(msg_id)
+
+    # --- connection ------------------------------------------------------------------------------------------------
     def start(self):
         self._task = asyncio.ensure_future(self.run())
         return self
 
     async def stop(self):
         self._stop.set()
+        self.mailbox.sender.wake.set()
         self._stopping()
         if self._task:
             self._task.cancel()
@@ -96,6 +119,9 @@ class Participant:
             self.clock_offset_ms = w["t"] - (t_hello + now_ms()) / 2
             self.timeout_s = float(w["timeout_s"])
             tasks = [asyncio.ensure_future(ch.heartbeat(float(w["heartbeat_s"])))]
+            self.mailbox.sender.start_session()
+            await self.mailbox.notify()             # messages stored but untold before a break or restart
+            tasks.append(asyncio.ensure_future(self.mailbox.sender.run(ch)))
             tasks += await self._active(ch, w)
             self.sessions += 1
             self.connected.set()
@@ -114,6 +140,12 @@ class Participant:
         finally:
             ch.abort()
             await reap(tasks)
+
+    def _serve(self, ch, handle):
+        """Task receiving frames from the hub: messages first, then the subclass's ``handle(frame)``."""
+        async def both(f):
+            return await self.mailbox.handle(ch, f) or await handle(f)
+        return asyncio.ensure_future(serve_frames(ch, self.timeout_s, both, "hub"))
 
     async def _have(self):
         return []

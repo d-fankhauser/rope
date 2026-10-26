@@ -17,8 +17,8 @@ networks – radio links, Wi-Fi, no internet. Like a rescue line it holds the co
 an interruption costs time, never data.
 
 > **Status:** early development. The [specification](docs/spec.md) is draft 1 with a proposed wire format. Streams
-> from sources via the hub to consumers work, including resume after disconnects and restarts and block repair;
-> messages and offline media are still to come. Interfaces will change.
+> from sources via the hub to consumers work, including resume after disconnects and restarts and block repair, and
+> so do messages with custody; offline media are still to come. Interfaces will change.
 
 ## Why
 
@@ -104,7 +104,7 @@ ROPE's default port is **47310**; applications can override it.
 | `docs/ideas.md` | Ideas not yet planned |
 | `docs/images/` | Logo and symbol (SVG; light and dark variant) |
 | `TASKS.md` | Task board |
-| `src/rope_protocol/` | Package: frame codec (`frames.py`), link simulator (`linksim.py`), durable store (`store.py`), sending and receiving side of streams (`sender.py`, `receiver.py`), participants (`hub.py`, `source.py`, `consumer.py`, base `participant.py`) |
+| `src/rope_protocol/` | Package: frame codec (`frames.py`), link simulator (`linksim.py`), durable store (`store.py`), sending and receiving side of streams (`sender.py`, `receiver.py`), messages (`messages.py`), participants (`hub.py`, `source.py`, `consumer.py`, `recipient.py`, base `participant.py`) |
 | `tests/` | Unit tests and, later, the fault-injection test bench |
 | `AGENTS.md` | Guidelines for contributors and coding agents |
 
@@ -116,8 +116,8 @@ file arrives bit-for-bit identical and every message exactly once.
 
 ## Limitations
 
-- Early development: streams from sources via the hub to consumers work; messages and offline media do not exist
-  yet. Interfaces and the wire format may still change.
+- Early development: streams and messages work; offline media do not exist yet. Interfaces and the wire format may
+  still change.
 - Not a general file synchronisation tool and not meant for the internet.
 - No encryption, no authentication beyond a participant list.
 - Not compatible with CFDP or DTN software; only the ideas are borrowed.

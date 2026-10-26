@@ -10,8 +10,8 @@ _(see `docs/ideas.md`)_
 - [ ] **Test bench** – the link simulator exists (bandwidth, latency, blackouts, disconnects). Still missing:
       disconnect at every protocol step, restarts, duplicate/damaged/reordered segments, and a long soak run over
       many seeds (opt-in, outside the normal test run – 40 seeds found a race the single-seed soak test missed).
-- [ ] **Messages** with custody at the hub and per-recipient delivery state.
-- [ ] **Participant list and roles** (source, consumer, recipient), greeting with plain-language rejection reasons.
+- [ ] **Participant list:** roles and plain-language rejections exist (source, consumer, recipient). Still missing:
+      names, and what each participant receives (spec §7).
 - [ ] **Offline media** as a second path (export/import of segments and messages).
 - [ ] **Packaging** as `rope-protocol` on PyPI (check name availability first).
 - [ ] **Heartbeat and timeout for radio links:** the assumed 2 s / ~10 s may be too short for directional radio links
@@ -21,11 +21,13 @@ _(see `docs/ideas.md`)_
 
 
 ## In progress
-- [ ] **Relaying to consumers** (`feature/relay`, spec §7): the hub sends every stored stream on to every consumer,
-      named `<source>/<stream>`, with the same sender as the source. Shared building blocks: `sender.py`,
-      `receiver.py`, `participant.py`.
+- [ ] **Messages with custody** (`feature/messages`, spec §8.5): outbox, custody at the hub with state per
+      recipient, inbox with "told" flag, recipient role. Open: delivery report to the sender.
 
 ## Done
+- 2026-10-26 Relaying to consumers (#9, spec §7): the hub sends every stored stream on to every consumer, named
+  `<source>/<stream>`, with the same sender as the source. Shared building blocks: `sender.py`, `receiver.py`,
+  `participant.py`.
 - 2026-10-26 Block repair after a mismatch (#8, spec §14.7): `BLOCK_SUMS`, repair segments, new generation only for
   shorter or mostly different files, at most 3 rounds.
 - 2026-10-26 Core: streams from one source to the hub (#7): durable store (fsync before ACK, crash cut-back), hub with

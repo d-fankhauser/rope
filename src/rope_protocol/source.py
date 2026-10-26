@@ -10,7 +10,6 @@ import logging
 import os
 
 from . import DEFAULT_PORT
-from .channel import serve_frames
 from .participant import Participant, Rejected
 from .sender import OutStream, StreamSender
 from .store import write_json_atomic
@@ -77,9 +76,10 @@ class Source(Participant):
 
     def __init__(self, participant, operation, hub_host, streams, state_dir, hub_port=DEFAULT_PORT,
                  segment_bytes=256 * 1024, window=8, poll_s=0.5, timeout_s=10.0, backoff=(1.0, 10.0),
-                 zlib_level=1):
-        super().__init__(participant, operation, hub_host, hub_port, timeout_s, backoff)
+                 zlib_level=1, on_message=None):
         os.makedirs(state_dir, exist_ok=True)
+        super().__init__(participant, operation, hub_host, hub_port, timeout_s, backoff,
+                         mailbox_root=os.path.join(state_dir, "messages"), on_message=on_message, poll_s=poll_s)
         self._state_path = os.path.join(state_dir, "source_state.json")
         saved = {}
         if os.path.exists(self._state_path):
@@ -118,8 +118,7 @@ class Source(Participant):
 
         async def handle(f):
             return self.sender.handle(f)
-        return [asyncio.ensure_future(serve_frames(ch, self.timeout_s, handle, "hub")),
-                asyncio.ensure_future(self.sender.run(ch))]
+        return [self._serve(ch, handle), asyncio.ensure_future(self.sender.run(ch))]
 
     async def _refresh(self):
         changed = False

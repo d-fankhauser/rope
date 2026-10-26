@@ -6,9 +6,9 @@ The application reads the received bytes from ``path`` up to ``committed`` while
 """
 
 import asyncio
+import os
 
 from . import DEFAULT_PORT
-from .channel import serve_frames
 from .participant import Participant
 from .receiver import BLOCK_SIZE, StreamReceiver
 from .store import StreamStore
@@ -18,14 +18,16 @@ FROM_HUB = "hub"
 
 
 class Consumer(Participant):
-    """``root``: folder for the received streams. ``on_written(stream, gen, committed)`` after every durable write,
-    ``on_checked(stream, gen, result, path)`` after every final check - both called in the event loop."""
+    """``root``: folder for the received streams and the mailbox. ``on_written(stream, gen, committed)`` after every
+    durable write, ``on_checked(stream, gen, result, path)`` after every final check, ``on_message(meta, body)`` once
+    per new message - all called in the event loop."""
 
     role = "consumer"
 
     def __init__(self, participant, operation, hub_host, root, hub_port=DEFAULT_PORT, timeout_s=10.0,
-                 backoff=(1.0, 10.0), block_size=BLOCK_SIZE, on_written=None, on_checked=None):
-        super().__init__(participant, operation, hub_host, hub_port, timeout_s, backoff)
+                 backoff=(1.0, 10.0), block_size=BLOCK_SIZE, on_written=None, on_checked=None, on_message=None):
+        super().__init__(participant, operation, hub_host, hub_port, timeout_s, backoff,
+                         mailbox_root=os.path.join(root, "messages"), on_message=on_message)
         self.store = StreamStore(root)
         self.on_written = on_written
         self.on_checked = on_checked
@@ -51,7 +53,7 @@ class Consumer(Participant):
     async def _active(self, ch, welcome):
         async def handle(f):
             return await self.receiver.handle(ch, f)
-        return [asyncio.ensure_future(serve_frames(ch, self.timeout_s, handle, "hub"))]
+        return [self._serve(ch, handle)]
 
     def _written(self, owner, stream, gen, committed):
         if self.on_written:

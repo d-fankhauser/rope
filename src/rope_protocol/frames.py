@@ -57,7 +57,7 @@ REQUIRED = {
     FrameType.STREAM_END: ("stream", "gen", "size", "sha256"),
     FrameType.STREAM_CHECK: ("stream", "gen", "result", "size"),
     FrameType.BLOCK_SUMS: ("stream", "gen", "block_size", "first", "sums"),
-    FrameType.MESSAGE: ("id", "from", "to", "t", "kind", "enc"),
+    FrameType.MESSAGE: ("id", "from", "to", "t", "kind", "len", "crc", "enc"),
     FrameType.MESSAGE_ACK: ("id",),
 }
 
@@ -296,6 +296,23 @@ def segment(stream, gen, off, data, t, level=1, **extra):
     enc, blob = encode_payload(data, level)
     meta = dict(extra, stream=stream, gen=gen, off=off, len=len(data), crc=zlib.crc32(data), t=t, enc=enc)
     return Frame(FrameType.SEGMENT, meta, blob)
+
+
+def message(msg_id, sender, to, t, kind, body, level=1):
+    """Build a MESSAGE frame with the raw ``body`` (spec 8.5, 14.3)."""
+    enc, blob = encode_payload(body, level)
+    meta = dict(id=msg_id, to=list(to), t=t, kind=kind, len=len(body), crc=zlib.crc32(body), enc=enc)
+    meta["from"] = sender
+    return Frame(FrameType.MESSAGE, meta, blob)
+
+
+def message_body(frame):
+    """Decoded, CRC-checked body of a MESSAGE frame."""
+    m = frame.meta
+    body = decode_payload(m["enc"], frame.blob, m["len"])
+    if zlib.crc32(body) != m["crc"]:
+        raise FrameError("bad_frame", "message %s damaged (CRC mismatch)" % m["id"])
+    return body
 
 
 def segment_data(frame):
