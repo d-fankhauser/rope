@@ -7,6 +7,10 @@ finished → **Done** (date, short description; details in `docs/`).
 _(see `docs/ideas.md`)_
 
 ## Backlog
+- [ ] **`Hub.stop()` waits for disk writes still running in worker threads.** Today a hub restarted inside the
+      same program may start while the old one finishes a write, and may miss that latest state. Nothing is lost
+      (every step is repeated idempotently), but it can cause a resend. A restart of the whole program is not
+      affected.
 - [ ] **Test bench, rest:** a long soak over many seeds of the random link profiles (opt-in, like `ROPE_SOAK`);
       a real power cut (process killed, unsynced data lost) instead of a program stop.
 - [ ] **Packaging** as `rope-protocol` on PyPI (check name availability first).

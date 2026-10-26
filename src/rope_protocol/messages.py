@@ -47,8 +47,13 @@ class MessageStore:
                 with open(os.path.join(self.root, name), encoding="utf-8") as f:
                     rec = json.load(f)
                 self._items[rec["meta"]["id"]] = rec
-            elif name.endswith(".tmp"):
-                os.remove(os.path.join(self.root, name))            # crash during an atomic write
+            elif name.endswith(".tmp"):                             # crash during an atomic write
+                try:
+                    os.remove(os.path.join(self.root, name))
+                except OSError as e:
+                    # still being written (an earlier instance in the same program finishing a write): never fail
+                    # the start because of a leftover - the next start removes it (found by the test bench, spec 13)
+                    log.warning("leftover %s not removed: %s", name, e)
 
     def put(self, meta, body, state):
         """Take custody: store ``body`` and then ``meta``/``state`` durably. Returns False for a known id."""
