@@ -1,5 +1,6 @@
 """Test bench (spec 13): one fault at every frame of the procedure in turn - connection cut before or in the middle
-of the frame, frame sent twice, frame damaged - on the link of the source and on the link of a consumer.
+of the frame, frame sent twice, frame damaged, restart of the participant or of the hub - on the link of the source
+and on the link of a consumer.
 
 The scenario uses every part of the protocol: greeting, segments, a header changed in place (final check, block
 sums, repair), relaying to a consumer, messages both ways and the delivery report. Pass criterion after every fault:
@@ -9,6 +10,9 @@ its delivery report.
 Every step = every occurrence of every frame type of a clean run, except heartbeats (their number depends on
 timing; the first two are included). The normal test run cuts the connection at every step and tries the other
 faults at a few steps; ``ROPE_SOAK=1`` runs every fault at every step (several minutes).
+
+A restart stops the participant or the hub the way a program ends (tasks cancelled, nothing more written) and starts
+a new one on the same folders - not a power cut, which can lose what the operating system had not written yet.
 """
 
 import asyncio
@@ -24,7 +28,7 @@ from rope_protocol.consumer import Consumer
 from rope_protocol.hub import Hub
 from rope_protocol.recipient import Recipient
 from rope_protocol.source import Source
-from framefault import DOWN, FAULTS, UP, FrameFaultProxy
+from framefault import DOWN, FAULTS, RESTARTS, UP, FrameFaultProxy
 from test_transfer import _file, _patch_file, _until
 
 SOAK = os.environ.get("ROPE_SOAK") == "1"
@@ -43,20 +47,49 @@ async def scenario(tmp, link="source", fault=None, direction=UP, at=None):
     path = _file(tmp, "rec.dat", DATA)
     told = Counter()
     reports = []
-    hub = await Hub(os.path.join(tmp, "hub"), PARTICIPANTS, "op-1", port=0, block_size=BLOCK, poll_s=0.05,
-                    segment_bytes=SEG, **FAST).start()
+    cur = {}                                            # the running hub and participants (replaced on restart)
+
+    def new_hub(port):
+        return Hub(os.path.join(tmp, "hub"), PARTICIPANTS, "op-1", port=port, block_size=BLOCK, poll_s=0.05,
+                   segment_bytes=SEG, **FAST)
+
+    def new_consumer():
+        return Consumer("c-1", "op-1", "127.0.0.1", os.path.join(tmp, "c-1"), hub_port=p_con.port, block_size=BLOCK,
+                        on_message=lambda m, body: told.update([("c-1", body)]), **PEER)
+
+    def new_source():
+        s = Source("source-1", "op-1", "127.0.0.1", {"rec": path}, os.path.join(tmp, "src"), hub_port=p_src.port,
+                   segment_bytes=SEG, poll_s=0.05, on_message=lambda m, body: told.update([("source-1", body)]),
+                   on_delivery=lambda i, rep: reports.append(rep), **PEER)
+        if cur.get("completed"):
+            s.complete("rec")                           # the application asks again after its restart
+        return s
+
+    async def restart(what):
+        if what == "restart_hub":
+            port = cur["hub"].port
+            await cur["hub"].stop()
+            await asyncio.sleep(0.05)
+            cur["hub"] = await new_hub(port).start()
+            return
+        key = "src" if link == "source" else "c"
+        await cur[key].stop()
+        await asyncio.sleep(0.05)                       # a restart takes a moment; a write still running finishes
+        cur[key] = (new_source if key == "src" else new_consumer)().start()
+
+    cur["hub"] = hub = await new_hub(0).start()
     p_src = await FrameFaultProxy(("127.0.0.1", hub.port), *((fault, direction, at) if link == "source" else ())
                                   ).start()
     p_con = await FrameFaultProxy(("127.0.0.1", hub.port), *((fault, direction, at) if link == "consumer" else ())
                                   ).start()
-    c = Consumer("c-1", "op-1", "127.0.0.1", os.path.join(tmp, "c-1"), hub_port=p_con.port, block_size=BLOCK,
-                 on_message=lambda m, body: told.update([("c-1", body)]), **PEER).start()
+    p_src.on_restart = p_con.on_restart = restart
+    cur["c"] = new_consumer().start()
     r = Recipient("r-1", "op-1", "127.0.0.1", os.path.join(tmp, "r-1"), hub_port=hub.port, poll_s=0.05,
                   on_message=lambda m, body: told.update([("r-1", body)]), **PEER).start()
-    src = Source("source-1", "op-1", "127.0.0.1", {"rec": path}, os.path.join(tmp, "src"), hub_port=p_src.port,
-                 segment_bytes=SEG, poll_s=0.05, on_message=lambda m, body: told.update([("source-1", body)]),
-                 on_delivery=lambda i, rep: reports.append(rep), **PEER).start()
+    cur["src"] = new_source().start()
+
     def state():
+        src, c, hub = cur["src"], cur["c"], cur["hub"]
         o = src.streams["rec"].out
         hs = hub.store.get("source-1", "rec", 1)
         return ("source: acked %d final %s end_sent %s result %s rounds %d sums %s repairs %s | hub: committed %d "
@@ -71,26 +104,27 @@ async def scenario(tmp, link="source", fault=None, direction=UP, at=None):
             raise AssertionError("waiting for %s: %s" % (what, state())) from None
 
     try:
-        task = src.send_message(["c-1", "r-1"], "task", b"check position 7")
+        task = cur["src"].send_message(["c-1", "r-1"], "task", b"check position 7")
         r.send_message(["source-1"], "reply", b"understood")
-        c.send_message(["source-1"], "reply", b"on my way")
+        cur["c"].send_message(["source-1"], "reply", b"on my way")
 
         def hub_has_all():
-            rs = hub.store.get("source-1", "rec", 1)
-            return rs.committed == len(DATA)
+            return cur["hub"].store.get("source-1", "rec", 1).committed == len(DATA)
         await wait("the hub to hold the file", hub_has_all)
         data = bytearray(DATA)
         data[2:6] = HEADER
         _patch_file(path, 2, HEADER)                    # changed in place after sending: block repair
-        src.complete("rec")
+        cur["completed"] = True
+        cur["src"].complete("rec")
 
         def consumer_done():
-            return any(s["stream"] == "source-1/rec" and s["verified"] == "ok" for s in c.streams())
-        await wait("the final checks", lambda: src.streams["rec"].out.result == "ok" and consumer_done())
+            return any(s["stream"] == "source-1/rec" and s["verified"] == "ok" for s in cur["c"].streams())
+        await wait("the final checks", lambda: cur["src"].streams["rec"].out.result == "ok" and consumer_done())
         await wait("the messages", lambda: len(told) == 4)
-        await wait("the delivery report", lambda: (src.outbox()[0]["report"] or {}).get("pending") == [])
+        await wait("the delivery report", lambda: (cur["src"].outbox()[0]["report"] or {}).get("pending") == [])
         await asyncio.sleep(0.2)                        # late duplicates would show up now
 
+        src, c, hub = cur["src"], cur["c"], cur["hub"]
         assert src.streams["rec"].gen == 1
         for rs in (hub.store.get("source-1", "rec", 1), c.received("source-1/rec")):
             with open(rs.path, "rb") as f:
@@ -101,9 +135,12 @@ async def scenario(tmp, link="source", fault=None, direction=UP, at=None):
         assert reports[-1]["pending"] == [] and len(reports) <= 2
         return p_src, p_con
     finally:
-        for p in (src, c, r):
+        for p in (p_src, p_con):
+            if p.restart_task is not None:
+                await p.restart_task
+        for p in (cur["src"], cur["c"], r):
             await p.stop()
-        await hub.stop()
+        await cur["hub"].stop()
         for p in (p_src, p_con):
             await p.stop()
 
@@ -185,6 +222,13 @@ def test_cut_at_every_frame(tmp_path, link):
     if link == "source":
         expected |= {"DELIVERY", "DELIVERY_ACK"}
     assert expected <= names, expected - names
+
+
+@pytest.mark.parametrize("link", ["source", "consumer"])
+def test_restart_at_every_frame(tmp_path, link):
+    """The participant on the link or the hub stops just before a frame and starts again on the same folders."""
+    hit = _run_all(tmp_path, link, list(RESTARTS), None if SOAK else {"HELLO", "STREAM_END", "MESSAGE", "DELIVERY"})
+    assert {k[0] for k in hit} == set(RESTARTS)
 
 
 @pytest.mark.parametrize("link", ["source", "consumer"])

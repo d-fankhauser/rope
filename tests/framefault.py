@@ -11,7 +11,9 @@ counted over all connections - by type rather than by position, because heartbea
 - ``cut``: abort both connections before the frame,
 - ``cut_mid``: send the first half of the frame, then abort,
 - ``dup``: send the frame twice,
-- ``damage``: flip one byte inside the frame (the receiver sees a CRC error).
+- ``damage``: flip one byte inside the frame (the receiver sees a CRC error),
+- ``restart_peer`` / ``restart_hub``: hold the frame back, abort the connections and call ``on_restart(fault)``
+  (async), which restarts the participant on this link or the hub - as if it stopped just before the frame.
 """
 
 import asyncio
@@ -20,17 +22,20 @@ from rope_protocol import frames as F
 
 UP, DOWN = "up", "down"         # up: client (participant) -> target (hub)
 FAULTS = ("cut", "cut_mid", "dup", "damage")
+RESTARTS = ("restart_peer", "restart_hub")
 
 
 class FrameFaultProxy:
     def __init__(self, target, fault=None, direction=UP, at=None):
-        assert fault is None or fault in FAULTS
+        assert fault is None or fault in FAULTS + RESTARTS
         self.target = target
         self.fault = fault
         self.direction = direction
         self.at = at
         self.seen = {UP: {}, DOWN: {}}      # frames seen per direction and type, over all connections
         self.fired = None                   # frame type the fault hit, once it fired
+        self.on_restart = None
+        self.restart_task = None
         self._server = None
         self._transports = set()
         self._tasks = set()
@@ -108,6 +113,10 @@ class FrameFaultProxy:
             writer.write(frame)
             return True
         self.fired = ftype
+        if self.fault in RESTARTS:
+            self._abort_all()
+            self.restart_task = asyncio.ensure_future(self.on_restart(self.fault))
+            return False
         if self.fault == "cut":
             self._abort_all()
             return False

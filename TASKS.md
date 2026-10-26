@@ -7,8 +7,12 @@ finished → **Done** (date, short description; details in `docs/`).
 _(see `docs/ideas.md`)_
 
 ## Backlog
-- [ ] **Test bench, rest:** restarts at every step (today: restarts at chosen points), a long soak over many seeds
-      of the random link profiles (opt-in, like `ROPE_SOAK`).
+- [ ] **`Hub.stop()` waits for disk writes still running in worker threads.** Today a hub restarted inside the
+      same program may start while the old one finishes a write, and may miss that latest state. Nothing is lost
+      (every step is repeated idempotently), but it can cause a resend. A restart of the whole program is not
+      affected.
+- [ ] **Test bench, rest:** a long soak over many seeds of the random link profiles (opt-in, like `ROPE_SOAK`);
+      a real power cut (process killed, unsynced data lost) instead of a program stop.
 - [ ] **Packaging** as `rope-protocol` on PyPI (check name availability first).
 - [ ] **Heartbeat and timeout for radio links:** the assumed 2 s / ~10 s may be too short for directional radio links
       (longer dropouts are normal there). Make both configurable; measure on a real radio network before fixing
@@ -20,10 +24,12 @@ _(see `docs/ideas.md`)_
       (spec §8.6, open point).
 
 ## In progress
-- [ ] **Test bench: a fault at every step** (`feature/test-bench`, spec §13): cut, cut mid-frame, duplicate, damage
-      at every frame type and occurrence; `ROPE_SOAK=1` for all.
+- [ ] **Restarts at every step** (`feature/restart-every-step`, spec §13): participant or hub restarted just before
+      every frame type and occurrence.
 
 ## Done
+- 2026-10-26 Test bench: a fault at every step (#14, spec §13): cut, cut mid-frame, duplicate, damage at every frame
+  type and occurrence; `ROPE_SOAK=1` for all.
 - 2026-10-26 Delivery report (#13, spec §8.5): `DELIVERY` / `DELIVERY_ACK`, over the network and on media.
 - 2026-10-26 Participant list (#12, spec §7): names, stream selection per consumer, every participant learns the
   list.

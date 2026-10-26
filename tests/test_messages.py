@@ -30,6 +30,16 @@ def test_store_custody_duplicates_and_restart(tmp_path):
     assert not (tmp_path / "x.json.tmp").exists()
 
 
+def test_leftover_still_being_written_does_not_stop_the_start(tmp_path):
+    """Found by the test bench on Windows: a hub restarted inside the same program found a .tmp file that the old
+    instance was still writing; removing it failed and the new hub did not start."""
+    MessageStore(tmp_path)
+    with open(tmp_path / "y.json.tmp", "w") as busy:                     # open: Windows refuses to remove it
+        busy.write("{")
+        again = MessageStore(tmp_path)
+    assert again.select(lambda r: True) == []
+
+
 def test_stored_but_untold_message_is_told_after_restart(tmp_path):
     """The connection broke after the message was stored and acknowledged, before the application was told."""
     got = []
