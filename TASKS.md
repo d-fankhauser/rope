@@ -9,8 +9,8 @@ _(see `docs/ideas.md`)_
 ## Backlog
 - [ ] **Core: single stream, one source, one hub** – send from committed offset, durable write + fsync before
       acknowledgement, resume after reconnect, final checksum.
-- [ ] **Test bench** – fault-injecting TCP proxy (disconnect at every step, delay, throttling, loss), restarts,
-      duplicate/damaged/reordered segments; runs on Windows and Linux in CI.
+- [ ] **Test bench** – the link simulator exists (bandwidth, latency, blackouts, disconnects). Still missing:
+      disconnect at every protocol step, restarts, duplicate/damaged/reordered segments.
 - [ ] **Messages** with custody at the hub and per-recipient delivery state.
 - [ ] **Participant list and roles** (source, consumer, recipient), greeting with plain-language rejection reasons.
 - [ ] **Offline media** as a second path (export/import of segments and messages).
@@ -21,7 +21,8 @@ _(see `docs/ideas.md`)_
 - [ ] Resolve the open points listed at the end of `docs/spec.md`.
 
 ## In progress
-- [ ] **Wire format draft 1** (`feature/wire-format`): spec §14 and frame codec `rope_protocol.frames` with tests.
+- [ ] **Wire format draft 1** (`feature/wire-format`): spec §14 and frame codec `rope_protocol.frames` with tests;
+      default port 47310; link simulator `rope_protocol.linksim` (first part of the test bench).
 
 ## Done
 - 2026-10-19 Repository created: specification draft 0, licence, contribution guidelines, CI (pyflakes + pytest on

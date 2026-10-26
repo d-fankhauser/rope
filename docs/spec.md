@@ -251,13 +251,40 @@ bench runs on Windows and Linux in CI (**decided**):
 **Pass criterion of every test:** at the end the stream at the receiver is bit-for-bit identical to the original, and
 every message has arrived exactly once.
 
+**Link simulator** (`rope_protocol.linksim`, implemented). It is a TCP proxy between two participants and behaves like
+an unreliable link, per direction:
+- bandwidth limit, latency and jitter
+- **blackouts:** no data flows, but the connections stay open, as with shadowing on a directional radio link
+- **disconnects:** all connections are aborted, followed by an outage
+
+Faults follow a random schedule from a profile (reproducible with a seed) or an exact script for tests. It can also
+be run by hand: `python -m rope_protocol.linksim --listen 127.0.0.1:47311 --target 127.0.0.1:47310 --profile radio`.
+
+The profiles are **assumed** and must be replaced by measurements on real links:
+
+| Profile | Bandwidth | Latency | Blackouts | Disconnects |
+|---|---|---|---|---|
+| `lan` | unlimited | – | – | – |
+| `wifi` | 2.5 MB/s | 5 ms + up to 10 ms | every ~2 min, 0.2–2 s | – |
+| `radio` | 500 kB/s (~4 Mbit/s) | 10 ms + up to 20 ms | every ~1 min, 0.5–20 s | every ~15 min, down 5–60 s |
+| `radio-bad` | 125 kB/s (~1 Mbit/s) | 30 ms + up to 50 ms | every ~20 s, 1–60 s | every ~3 min, down 10–300 s |
+
+Limits of the simulation:
+- It acts on the byte stream, not on radio packets. Packet loss and retransmissions inside TCP appear only as delay.
+- During an outage, a new connection is accepted by the proxy and waits. On a real link the connection attempt itself
+  would wait or fail.
+
 ## 14. Wire format
 
 Everything in this section is **proposed** (draft 1).
 
 ### 14.1 Transport
 
-- ROPE runs over one TCP connection per participant (§5). The port is configurable and has no default yet (open point).
+- ROPE runs over one TCP connection per participant (§5).
+- **Default port 47310** (TCP). Every application must be able to override it. At the time of choosing (2026-10-26)
+  the port was not assigned in the IANA registry, no known software used it, and it lies below the dynamic range that
+  operating systems use for outgoing connections (49152 and up). It is not registered with IANA. If the hub cannot
+  listen on the port, it reports this in plain language and names the port; it never silently picks another one.
 - An application may wrap the connection in TLS, e.g. with certificates on both sides, when the network is not closed
   (§11). The frames inside are unchanged; the core does not know whether TLS is in use.
 - All integers are unsigned and big-endian (network byte order).
@@ -366,7 +393,7 @@ The last four bytes are the CRC-32 of the 31 bytes before them. `tests/test_fram
 
 - [x] Wire format: framing, encoding of control messages, checksum algorithm, version negotiation (draft 1, §14,
       proposed).
-- [ ] Default TCP port.
+- [x] Default TCP port: 47310, overridable (§14.1).
 - [ ] Message body size above 1 MiB: split into several frames or forbid (draft 1: at most one blob of 1 MiB).
 - [ ] Network: fixed hub address or discovery; other users on the same network.
 - [ ] Bandwidth and typical outages of the radio links (how often, how long).

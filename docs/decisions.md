@@ -2,6 +2,15 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – Default port and link simulator
+- **Default port 47310, overridable by every application (decided).** The maintainer wants a default that is
+  overridable and not used by other software by chance; the exact number does not matter. When chosen, 47310 was not
+  assigned in the IANA registry and no software was known to use it. It also lies below the dynamic port range
+  (49152+) that operating systems use for outgoing connections. No silent fallback to another port.
+- **Link simulator instead of a real radio link (decided)** for now: no radio link is available for measurements.
+  A TCP proxy simulates bandwidth, latency, blackouts (connection stays open) and disconnects. Its profiles are
+  **assumed** until real links are measured.
+
 ### 2026-10-25 – Wire format draft 1 (proposed)
 - One frame layout for everything: 12-byte header, JSON meta, binary blob, CRC-32 (spec §14.2). One parser, readable
   captures, extendable without breaking older participants (unknown keys ignored, extension types `0x80`–`0xFF`).
