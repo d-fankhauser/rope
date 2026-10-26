@@ -153,7 +153,8 @@ class Mailbox:
         self.participant = participant
         self.on_message = on_message
         self.store = MessageStore(root)
-        self.sender = MessageSender(self.store, self._pending, self._acked, poll_s)
+        self.sender = MessageSender(self.store, self.pending, self._acked, poll_s)
+        self._notify_lock = asyncio.Lock()     # a medium import and a network session may notify at the same time
 
     def send(self, to, kind, body):
         """Put a message into the outbox (durably) and return its id. It leaves with the next connection."""
@@ -179,14 +180,16 @@ class Mailbox:
 
     async def notify(self):
         """Tell the application about every stored message it was not told about yet (at least once)."""
-        for rec in self.store.select(lambda r: r["state"].get("box") == "in" and not r["state"].get("told", True)):
-            msg_id = rec["meta"]["id"]
-            if self.on_message:
-                body = await asyncio.to_thread(self.store.body, msg_id)
-                self.on_message(rec["meta"], body)
-            await asyncio.to_thread(self.store.update, msg_id, told=True)
+        async with self._notify_lock:
+            for rec in self.store.select(lambda r: r["state"].get("box") == "in" and not r["state"].get("told", True)):
+                msg_id = rec["meta"]["id"]
+                if self.on_message:
+                    body = await asyncio.to_thread(self.store.body, msg_id)
+                    self.on_message(rec["meta"], body)
+                await asyncio.to_thread(self.store.update, msg_id, told=True)
 
-    def _pending(self):
+    def pending(self):
+        """Records of the outbox messages the hub has not taken into custody yet."""
         return self.store.select(lambda r: r["state"].get("box") == "out" and not r["state"]["at_hub"])
 
     def _acked(self, msg_id):

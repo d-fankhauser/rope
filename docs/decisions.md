@@ -2,6 +2,19 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – Offline media as bundles of wire-format frames (proposed)
+- **Same frames as on the network**, in files on the medium. No second format to specify and test; every check of
+  the network path (CRC per frame, segment CRC, committed offset, duplicates, final SHA-256) applies to media as
+  well.
+- **Receipts travel back as `ACK` and `MESSAGE_ACK`**, so a stick going back and forth makes the next bundle
+  smaller and moves messages to "delivered" also without any network.
+- **No block repair over media**: it needs the receiver's block sums first, i.e. a round trip of the stick. The
+  network repairs later; a final check from a stick never overrides a verified stream.
+- **Frames files of at most 1 GiB** because many sticks use FAT32 (4 GiB per file).
+- **Hub remembers a consumer's last reported offsets for media only** (`media_have.json`); without it every
+  bundle for a consumer would start from zero. The network path stays without state per consumer.
+- **ROPE never deletes from a medium**; when to clear a stick depends on the application's procedures.
+
 ### 2026-10-26 – Messages with custody (proposed)
 - **Every role may send and receive messages**; a recipient only receives no streams. Answers ("understood") come
   from the same devices that receive tasks.

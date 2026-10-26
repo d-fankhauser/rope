@@ -131,6 +131,28 @@ class Source(Participant):
     async def _save(self):
         await asyncio.to_thread(write_json_atomic, self._state_path, {n: x.saved() for n, x in self.streams.items()})
 
+    # --- offline media (spec 8.6) ------------------------------------------------------------------------------------
+    async def _media_streams(self):
+        """Every stream not yet verified at the hub, from what the hub acknowledged (over the network or in a bundle
+        from the hub; 0 after a restart - the hub ignores what it already holds)."""
+        await self._refresh()
+        out = []
+        for s in self.streams.values():
+            o = s.out
+            if o.result == "ok":
+                continue
+            limit = o.final_size if o.final_size is not None else o.size
+            out.append((o.name, o.gen, o.path, min(o.acked, limit), limit, o.final_size))
+        return out
+
+    async def _media_imported(self, report):
+        for stream, gen, committed in report.acks:      # what the hub holds: the next bundle starts there
+            s = self.streams.get(stream)
+            if s is not None and s.out.gen == gen:
+                s.out.acked = max(s.out.acked, committed)
+        if report.acks:
+            self.sender.wake.set()
+
     async def _replaced(self, out):
         """Most blocks differ at the hub: the file was replaced, not edited - keep the hub's version, start over."""
         for s in self.streams.values():

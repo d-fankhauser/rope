@@ -12,7 +12,6 @@ _(see `docs/ideas.md`)_
       many seeds (opt-in, outside the normal test run – 40 seeds found a race the single-seed soak test missed).
 - [ ] **Participant list:** roles and plain-language rejections exist (source, consumer, recipient). Still missing:
       names, and what each participant receives (spec §7).
-- [ ] **Offline media** as a second path (export/import of segments and messages).
 - [ ] **Packaging** as `rope-protocol` on PyPI (check name availability first).
 - [ ] **Heartbeat and timeout for radio links:** the assumed 2 s / ~10 s may be too short for directional radio links
       (longer dropouts are normal there). Make both configurable; measure on a real radio network before fixing
@@ -21,10 +20,12 @@ _(see `docs/ideas.md`)_
 
 
 ## In progress
-- [ ] **Messages with custody** (`feature/messages`, spec §8.5): outbox, custody at the hub with state per
-      recipient, inbox with "told" flag, recipient role. Open: delivery report to the sender.
+- [ ] **Offline media** (`feature/offline-media`, spec §8.6): bundles of wire-format frames on removable media,
+      receipts back, mixed with the network. Open: block repair over media, clearing sticks.
 
 ## Done
+- 2026-10-26 Messages with custody (#10, spec §8.5): outbox, custody at the hub with state per recipient, inbox with
+  "told" flag, recipient role. Open: delivery report to the sender.
 - 2026-10-26 Relaying to consumers (#9, spec §7): the hub sends every stored stream on to every consumer, named
   `<source>/<stream>`, with the same sender as the source. Shared building blocks: `sender.py`, `receiver.py`,
   `participant.py`.
