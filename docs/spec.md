@@ -229,6 +229,9 @@ All numbers are **proposed** starting values until measured.
   connection breaks between storing and telling, a resent copy is a duplicate and would not tell it again. So every
   untold message is told after each received message and when a session starts. The application is told at least
   once; in practice exactly once (it is told twice only if the program stops between telling and recording that).
+  Within one run of the program the participant also notes in memory, without a pause after telling, what it told:
+  a session that ends while the flag is being written does not lead the next session to tell again (found by the
+  test bench, §13).
 - **Priority:** messages travel in their own task on the same connection. A message waits behind at most the
   segment being written, not behind the stream backlog. The test bench checks this on a simulated 1 MB/s link
   with a 3 MB file in progress: the message must arrive within 2 s, while the file is still on its way.

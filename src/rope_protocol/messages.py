@@ -207,6 +207,9 @@ class Mailbox:
         self.store = MessageStore(root)
         self.sender = MessageSender(self.store, self.pending, self._acked, poll_s)
         self._notify_lock = asyncio.Lock()     # a medium import and a network session may notify at the same time
+        # told in this run, noted without a pause after telling: a session cancelled while the "told" flag is being
+        # written must not lead the next session to tell again (found by the test bench, spec 13)
+        self._told = set()
 
     def send(self, to, kind, body):
         """Put a message into the outbox (durably) and return its id. It leaves with the next connection."""
@@ -236,15 +239,22 @@ class Mailbox:
         async with self._notify_lock:
             for rec in self.store.select(lambda r: r["state"].get("box") == "in" and not r["state"].get("told", True)):
                 msg_id = rec["meta"]["id"]
+                if msg_id in self._told:
+                    await asyncio.to_thread(self.store.update, msg_id, told=True)
+                    continue
+                body = await asyncio.to_thread(self.store.body, msg_id) if self.on_message else None
                 if self.on_message:
-                    body = await asyncio.to_thread(self.store.body, msg_id)
                     self.on_message(rec["meta"], body)
+                self._told.add(msg_id)
                 await asyncio.to_thread(self.store.update, msg_id, told=True)
             for rec in self.store.select(lambda r: r["state"].get("box") == "out"
                                          and r["state"].get("report_told") is False):
                 msg_id = rec["meta"]["id"]
-                if self.on_delivery:
-                    self.on_delivery(msg_id, rec["state"]["report"])
+                key = ("report", msg_id, len(rec["state"]["report"]["delivered"]))
+                if key not in self._told:
+                    if self.on_delivery:
+                        self.on_delivery(msg_id, rec["state"]["report"])
+                    self._told.add(key)
                 await asyncio.to_thread(self.store.update, msg_id, report_told=True)
 
     def pending(self):
