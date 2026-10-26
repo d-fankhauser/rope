@@ -121,6 +121,15 @@ the hub.
   - *recipient* – receives messages only.
 - **Need-to-know:** raw streams only to consumers; messages also to recipients.
 - **Several consumers:** a second consumer receives the same streams via the hub.
+- **Relaying (proposed, first implementation 2026-10-26):**
+  - To a consumer, the hub is a sender exactly as a source is to the hub: same window, resume from the consumer's
+    committed offset, final check and block repair (§8.2–8.4, §14.7).
+  - A consumer receives every stream of every source of the operation, while the stream still grows.
+  - A relayed stream is named `<source>/<stream>`, so that streams of different sources never mix.
+  - The hub sends the final check to a consumer only after its own copy passed the check.
+  - The hub keeps no delivery state per consumer. The consumer reports what it holds when it greets (`HELLO.have`,
+    §14.5), so a restart of the hub or of the consumer loses nothing.
+  - Order: streams in name order, each from its committed offset (see open point "catch-up order").
 - **Group size:** a few devices, no open membership (**decided**).
 - **Hub down:** all participants keep collecting and send as soon as the hub is back. A standby hub is an open point.
 
@@ -351,8 +360,10 @@ Optional keys: `SEGMENT` may carry `repair` (`true` or `false`, default `false`,
 
 - **Times** (`t`, `t_hello`): integer milliseconds since 1970-01-01 UTC, from the clock of the frame's sender.
 - **Identifiers** (`participant`, `hub`, `operation`, `from`, entries of `to`): 1–64 characters from `A–Z a–z 0–9 . _ -`.
-- **Stream name** (`stream`): chosen by the application, 1–255 bytes UTF-8, e.g. `source-1/rec-0005.dat`. A receiver
-  must **never** use it directly as a file path; it maps names to its own storage.
+- **Stream name** (`stream`): chosen by the application, 1–255 bytes UTF-8, e.g. `rec-0005.dat`. A receiver
+  must **never** use it directly as a file path; it maps names to its own storage. The hub relays a stream as
+  `<source>/<stream>` (§7). That name must also fit in 255 bytes; otherwise the hub refuses the stream with `ERROR`
+  `bad_frame` and a plain-language reason.
 - **Generation** (`gen`): integer ≥ 1. The sender starts a new generation when a stream is not a continuation of the
   previous one: the file became shorter, or the final check finds more than half of its blocks changed (§14.7).
   Receivers keep every generation separately and never overwrite one with another. Bytes changed in place within a
@@ -435,7 +446,10 @@ Status: **proposed** (block size, the half rule and the 3 rounds are assumptions
 - [ ] Message body size above 1 MiB: split into several frames or forbid (draft 1: at most one blob of 1 MiB).
 - [ ] Network: fixed hub address or discovery; other users on the same network.
 - [ ] Bandwidth and typical outages of the radio links (how often, how long).
-- [ ] Catch-up order: current stream first, or strictly in order.
+- [ ] Catch-up order: current stream first, or strictly in order. First implementation: streams in name order,
+      each from its committed offset.
+- [ ] Which consumer receives which streams. First implementation: every consumer receives every stream of the
+      operation (participant list §7 may later name what each participant receives).
 - [ ] Hub failure: standby hub or offline media only.
 
 **To measure**

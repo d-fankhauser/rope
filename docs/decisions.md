@@ -2,6 +2,17 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – Relaying to consumers (proposed)
+- **The hub sends like a source.** One sender implementation for both links (source → hub, hub → consumer):
+  resume, final check and block repair behave the same everywhere and are tested once.
+- **No delivery state per consumer at the hub.** The consumer reports what it holds in its greeting. Nothing to keep
+  consistent at the hub, and restarts on either side lose nothing.
+- **Relayed names `<source>/<stream>`** instead of a new meta key: no change to the frames, and two sources may use
+  the same stream name.
+- **Final check to consumers only after the hub's own check passed**, so a consumer never confirms bytes that the
+  hub might still repair.
+- **Every consumer receives every stream** of the operation for now; selection per consumer is an open point.
+
 ### 2026-10-26 – Block repair instead of a new generation for in-place changes (proposed)
 - **A changed beginning is no longer a new generation.** Recording programs may update a header after the data
   was written (to be confirmed on real devices). With the earlier rule, that would have meant a full retransfer of

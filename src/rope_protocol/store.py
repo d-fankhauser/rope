@@ -180,6 +180,7 @@ class StreamStore:
         self._folder = os.path.join(self.root, "streams")
         os.makedirs(self._folder, exist_ok=True)
         self._open = {}
+        self._index = None            # state of the streams on disk at the first entries() call
         self._lock = threading.Lock()
 
     def get(self, participant, stream, gen):
@@ -189,17 +190,32 @@ class StreamStore:
                 self._open[k] = ReceivedStream(os.path.join(self._folder, k), participant, stream, gen)
             return self._open[k]
 
+    def entries(self):
+        """Every stored stream as {participant, stream, gen, committed, complete, verified, path}.
+
+        Streams not opened since the start are read from their state file once; those never change unless opened.
+        """
+        with self._lock:
+            if self._index is None:
+                self._index = {}
+                for name in sorted(os.listdir(self._folder)):
+                    p = os.path.join(self._folder, name, "state.json")
+                    if os.path.isfile(p):
+                        with open(p, encoding="utf-8") as f:
+                            self._index[name] = json.load(f)
+            out = []
+            for k, s in self._index.items():
+                if k not in self._open:
+                    out.append(dict(participant=s["participant"], stream=s["stream"], gen=s["gen"],
+                                    committed=s["committed"], complete=s.get("complete", False),
+                                    verified=s.get("verified"), path=os.path.join(self._folder, k, "data")))
+            for rs in self._open.values():
+                out.append(dict(participant=rs.participant, stream=rs.stream, gen=rs.gen, committed=rs.committed,
+                                complete=rs.complete, verified=rs.verified, path=rs.path))
+            return out
+
     def have(self, participant):
         """[{stream, gen, committed}] of everything stored from ``participant`` (for WELCOME/HELLO, spec 14.5)."""
-        out = []
-        for name in sorted(os.listdir(self._folder)):
-            p = os.path.join(self._folder, name, "state.json")
-            if not os.path.isfile(p):
-                continue
-            with open(p, encoding="utf-8") as f:
-                s = json.load(f)
-            if s.get("participant") == participant:
-                k = _key(participant, s["stream"], s["gen"])
-                committed = self._open[k].committed if k in self._open else s["committed"]
-                out.append(dict(stream=s["stream"], gen=s["gen"], committed=committed))
-        return out
+        return [dict(stream=e["stream"], gen=e["gen"], committed=e["committed"])
+                for e in sorted(self.entries(), key=lambda e: (e["stream"], e["gen"]))
+                if e["participant"] == participant]

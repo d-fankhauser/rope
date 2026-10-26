@@ -32,6 +32,22 @@ def _retrieve(task):
         task.exception()
 
 
+async def serve_frames(ch, timeout_s, handle, peer):
+    """Receive frames until the connection ends. ``handle(frame)`` (async) returns False for frames it does not
+    take; heartbeats and unknown extensions are skipped, anything else ends the session."""
+    while True:
+        f = await ch.recv(timeout_s)
+        if await handle(f):
+            continue
+        if f.type == F.FrameType.HEARTBEAT or f.is_extension:
+            continue
+        if f.type == F.FrameType.BYE:
+            raise ConnectionError("the %s closed the session: %s" % (peer, f.meta["reason"]))
+        if f.type == F.FrameType.ERROR:
+            raise ConnectionError("the %s reported %s: %s" % (peer, f.meta["code"], f.meta["text"]))
+        raise F.FrameError("bad_frame", "unexpected %s from the %s" % (F.FrameType(f.type).name, peer))
+
+
 class Wakeup:
     """Like ``asyncio.Event`` with a timeout on ``wait``, for a single waiter, built without ``asyncio.wait_for``
     (see ``reap``): a cancellation always ends the wait."""

@@ -19,13 +19,15 @@ _(see `docs/ideas.md`)_
       defaults (spec §9).
 - [ ] Resolve the open points listed at the end of `docs/spec.md`.
 
-- [ ] **Relaying to consumers:** the hub sends stored streams on to consumers, resumable in the same way.
 
 ## In progress
-- [ ] **Block repair after a mismatch** (`feature/block-repair`, spec §14.7): `BLOCK_SUMS`, repair segments, new
-      generation only for shorter or mostly different files, at most 3 rounds.
+- [ ] **Relaying to consumers** (`feature/relay`, spec §7): the hub sends every stored stream on to every consumer,
+      named `<source>/<stream>`, with the same sender as the source. Shared building blocks: `sender.py`,
+      `receiver.py`, `participant.py`.
 
 ## Done
+- 2026-10-26 Block repair after a mismatch (#8, spec §14.7): `BLOCK_SUMS`, repair segments, new generation only for
+  shorter or mostly different files, at most 3 rounds.
 - 2026-10-26 Core: streams from one source to the hub (#7): durable store (fsync before ACK, crash cut-back), hub with
   participant list and plain-language REJECT, source following growing files without locks, resume from the
   committed offset, generations, final SHA-256 check; tests over the link simulator.

@@ -8,17 +8,11 @@ import os
 from rope_protocol import store
 from rope_protocol.linksim import Profile
 from rope_protocol.store import StreamStore
-from test_transfer import Bench, _file, _sha, _until
+from test_transfer import Bench, _file, _patch_file, _sha, _until
 
 BLOCK = 64 * 1024
 HARSH = Profile("harsh", rate=1_000_000, latency=0.01, jitter=0.02, blackout_every=0.4, blackout_len=(0.05, 0.9),
                 disconnect_every=1.0, outage_len=(0.05, 0.3), description="test only")
-
-
-def _patch(path, off, data):
-    with open(path, "r+b") as f:
-        f.seek(off)
-        f.write(data)
 
 
 def test_store_repair_write_and_block_sums(tmp_path):
@@ -46,7 +40,7 @@ def test_header_changed_in_place_is_repaired_not_resent(tmp_path):
             await _until(lambda: b.received("rec").committed == len(data))
             up_before = b.proxy.stats.bytes_up
             data[2:6] = b"\xff\xfe\xfd\xfc"
-            _patch(path, 2, data[2:6])                              # same size, beginning changed
+            _patch_file(path, 2, data[2:6])                              # same size, beginning changed
             src.complete("rec")
             assert await src.wait_checked("rec", 20) == "ok"
             await src.stop()
@@ -68,7 +62,7 @@ def test_repair_over_a_harsh_link(tmp_path, seed=5):
             await _until(lambda: b.received("h").committed == len(data), 60)
             for off in (10, 200_000, 650_000, 999_990):               # four of sixteen blocks
                 data[off:off + 8] = os.urandom(8)
-                _patch(path, off, data[off:off + 8])
+                _patch_file(path, off, data[off:off + 8])
             src.complete("h")
             assert await src.wait_checked("h", 60) == "ok"
             await src.stop()
@@ -87,13 +81,13 @@ def test_damage_at_the_hub_is_repaired(tmp_path):
             src = b.source({"d": path}).start()
             await _until(lambda: b.received("d").committed == len(data))
             rs = b.received("d")
-            _patch(rs.path, 300_000, b"\x00" * 100)
+            _patch_file(rs.path, 300_000, b"\x00" * 100)
             rs._sha = None                                          # as after a restart: hash from the disk
             src.complete("d")
             assert await src.wait_checked("d", 20) == "ok"
             await src.stop()
             assert _sha(rs.path) == hashlib.sha256(data).hexdigest()
-            assert src.streams["d"].repair_rounds == 1
+            assert src.streams["d"].out.repair_rounds == 1
     asyncio.run(run())
 
 
