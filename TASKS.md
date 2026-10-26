@@ -7,9 +7,8 @@ finished → **Done** (date, short description; details in `docs/`).
 _(see `docs/ideas.md`)_
 
 ## Backlog
-- [ ] **Test bench** – the link simulator exists (bandwidth, latency, blackouts, disconnects). Still missing:
-      disconnect at every protocol step, restarts, duplicate/damaged/reordered segments, and a long soak run over
-      many seeds (opt-in, outside the normal test run – 40 seeds found a race the single-seed soak test missed).
+- [ ] **Test bench, rest:** restarts at every step (today: restarts at chosen points), a long soak over many seeds
+      of the random link profiles (opt-in, like `ROPE_SOAK`).
 - [ ] **Packaging** as `rope-protocol` on PyPI (check name availability first).
 - [ ] **Heartbeat and timeout for radio links:** the assumed 2 s / ~10 s may be too short for directional radio links
       (longer dropouts are normal there). Make both configurable; measure on a real radio network before fixing
@@ -21,10 +20,11 @@ _(see `docs/ideas.md`)_
       (spec §8.6, open point).
 
 ## In progress
-- [ ] **Delivery report** (`feature/delivery-report`, spec §8.5): `DELIVERY` / `DELIVERY_ACK`, over the network and
-      on media.
+- [ ] **Test bench: a fault at every step** (`feature/test-bench`, spec §13): cut, cut mid-frame, duplicate, damage
+      at every frame type and occurrence; `ROPE_SOAK=1` for all.
 
 ## Done
+- 2026-10-26 Delivery report (#13, spec §8.5): `DELIVERY` / `DELIVERY_ACK`, over the network and on media.
 - 2026-10-26 Participant list (#12, spec §7): names, stream selection per consumer, every participant learns the
   list.
 - 2026-10-26 Offline media as a second path (#11, spec §8.6): bundles of wire-format frames on removable media,

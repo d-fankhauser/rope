@@ -142,6 +142,9 @@ class Participant:
                 delay = self.backoff[1]
             except (ConnectionError, OSError, asyncio.TimeoutError, F.FrameError) as e:
                 log.info("%s: connection lost (%s), retrying in %.1f s", self.participant, e, delay)
+            except Exception:
+                # a bug must not end the loop for good: the participant would never connect again
+                log.exception("%s: unexpected error in the session, reconnecting in %.1f s", self.participant, delay)
             finally:
                 self.connected.clear()
             if self._stop.is_set():

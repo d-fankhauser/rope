@@ -110,14 +110,19 @@ ROPE's default port is **47310**; applications can override it.
 | `docs/images/` | Logo and symbol (SVG; light and dark variant) |
 | `TASKS.md` | Task board |
 | `src/rope_protocol/` | Package: frame codec (`frames.py`), link simulator (`linksim.py`), durable store (`store.py`), sending and receiving side of streams (`sender.py`, `receiver.py`), messages (`messages.py`), offline media (`media.py`), participant list (`roster.py`), participants (`hub.py`, `source.py`, `consumer.py`, `recipient.py`, base `participant.py`) |
-| `tests/` | Unit tests and, later, the fault-injection test bench |
+| `tests/` | Unit tests and the fault-injection test bench (`framefault.py`, `test_faults.py`) |
 | `AGENTS.md` | Guidelines for contributors and coding agents |
 
 ## Testing
 
-Every change runs `pyflakes` and `pytest` on Windows and Linux (Python 3.11–3.13). The planned test bench injects
-faults – disconnects at every step, delay, throttling, restarts, duplicate and damaged segments – and checks that every
-file arrives bit-for-bit identical and every message exactly once.
+Every change runs `pyflakes` and `pytest` on Windows and Linux (Python 3.11–3.13). The test bench injects faults – a
+simulated radio link with blackouts and disconnects, restarts, and one fault at every step of the procedure (connection
+cut before or in the middle of a frame, frame duplicated or damaged) – and checks that every file arrives bit-for-bit
+identical and every message exactly once. The full set of faults at every step runs with:
+
+```
+ROPE_SOAK=1 python -m pytest tests/test_faults.py
+```
 
 ## Limitations
 
