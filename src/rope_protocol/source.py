@@ -130,7 +130,7 @@ class Source(Participant):
         return [s.out for s in self.streams.values()]
 
     async def _save(self):
-        await asyncio.to_thread(self._write_state, {n: x.saved() for n, x in self.streams.items()})
+        await self._activity.run(self._write_state, {n: x.saved() for n, x in self.streams.items()})
 
     def _write_state(self, state):
         with self._activity:

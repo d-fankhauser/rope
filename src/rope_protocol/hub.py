@@ -151,7 +151,8 @@ class Hub:
             mail = M.MessageSender(self.messages, lambda: self._mail_for(participant),
                                    lambda msg_id: self._delivered(msg_id, participant), self.poll_s, self.zlib_level)
             mail.reports = M.ReportSender(lambda: self._reports_for(participant),
-                                          lambda msg_id, n: self._report_acked(msg_id, n, participant), self.poll_s)
+                                          lambda msg_id, n: self._report_acked(msg_id, n, participant), self.poll_s,
+                                          self.messages.activity)
             self._mail[participant] = mail
             try:
                 serve = dict(consumer=self._serve_consumer, source=self._serve_source,

@@ -13,6 +13,7 @@ Layout below ``root``::
 application are never used as paths (spec 14.4).
 """
 
+import asyncio
 import hashlib
 import json
 import os
@@ -84,6 +85,25 @@ class Activity:
         with self._cond:
             self._n -= 1
             self._cond.notify_all()
+
+    async def run(self, fn, *args, **kwargs):
+        """Like ``asyncio.to_thread(fn, *args)``, but a write once started always completes, and it counts from this
+        call on. Cancelling ``asyncio.to_thread`` drops a job that is still queued in the thread pool - a session
+        ending at that moment lost e.g. the "told" flag of a message, and the next session told it again (found by
+        the test bench on CI, spec 13). The caller still sees the cancellation at once; the write goes on."""
+        self.__enter__()
+
+        def job():
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                self.__exit__()
+        try:
+            inner = asyncio.ensure_future(asyncio.to_thread(job))
+        except BaseException:
+            self.__exit__()
+            raise
+        return await asyncio.shield(inner)
 
     def wait_idle(self, timeout_s):
         """True once no write is in progress, False after ``timeout_s``."""

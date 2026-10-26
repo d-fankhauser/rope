@@ -179,7 +179,7 @@ class Participant:
             self.hub_id = w["hub"]
             self.clock_offset_ms = w["t"] - (t_hello + now_ms()) / 2
             self.timeout_s = float(w["timeout_s"])
-            await asyncio.to_thread(self._learn_roster, w.get("participants"), w["t"])
+            await self._activity.run(self._learn_roster, w.get("participants"), w["t"])
             tasks = [asyncio.ensure_future(ch.heartbeat(float(w["heartbeat_s"])))]
             self.mailbox.sender.start_session()
             await self.mailbox.notify()             # messages stored but untold before a break or restart

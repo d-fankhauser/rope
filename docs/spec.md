@@ -341,6 +341,9 @@ The producer must never hang because of the transfer (**decided**). Measures (**
   that started it was cancelled. `stop()` of the hub and of every participant therefore waits until no disk write is
   running any more (at most 5 s, then it reports it). Afterwards a new instance on the same folders - e.g. a hub
   restarted inside the same program with a changed participant list - finds the final state.
+- **A write once started always completes:** a cancelled session does not drop a write that is still waiting for a
+  worker thread. Otherwise e.g. the "told" flag of a message could get lost and the next session would tell the
+  application again.
 
 ## 11. Security considerations
 
