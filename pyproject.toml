@@ -33,3 +33,5 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# network tests: print every thread's stack instead of hanging silently
+faulthandler_timeout = 120

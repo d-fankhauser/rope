@@ -10,14 +10,15 @@
 [![Tests](https://github.com/d-fankhauser/rope/actions/workflows/tests.yml/badge.svg)](https://github.com/d-fankhauser/rope/actions/workflows/tests.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)
-![Status: concept](https://img.shields.io/badge/status-concept-lightgrey.svg)
+![Status: early development](https://img.shields.io/badge/status-early_development-orange.svg)
 
 ROPE transfers growing files and small messages between a small, closed group of devices over unreliable local
 networks – radio links, Wi-Fi, no internet. Like a rescue line it holds the connection even when it is pulled:
 an interruption costs time, never data.
 
-> **Status:** concept. The [specification](docs/spec.md) is draft 1 with a proposed wire format; only the frame codec
-> is implemented so far. Interfaces will change.
+> **Status:** early development. The [specification](docs/spec.md) is draft 1 with a proposed wire format. Streams
+> from sources to a hub work, including resume after disconnects and restarts; relaying to consumers, messages and
+> offline media are still to come. Interfaces will change.
 
 ## Why
 
@@ -100,7 +101,7 @@ ROPE's default port is **47310**; applications can override it.
 | `docs/ideas.md` | Ideas not yet planned |
 | `docs/images/` | Logo and symbol (SVG; light and dark variant) |
 | `TASKS.md` | Task board |
-| `src/rope_protocol/` | Package: frame codec of the wire format (`frames.py`), link simulator (`linksim.py`); the rest is to come |
+| `src/rope_protocol/` | Package: frame codec (`frames.py`), link simulator (`linksim.py`), durable store (`store.py`), hub (`hub.py`), source (`source.py`) |
 | `tests/` | Unit tests and, later, the fault-injection test bench |
 | `AGENTS.md` | Guidelines for contributors and coding agents |
 
@@ -112,7 +113,8 @@ file arrives bit-for-bit identical and every message exactly once.
 
 ## Limitations
 
-- Concept stage: no working implementation yet.
+- Early development: streams from sources to the hub work; relaying to consumers, messages and offline media do not
+  exist yet. Interfaces and the wire format may still change.
 - Not a general file synchronisation tool and not meant for the internet.
 - No encryption, no authentication beyond a participant list.
 - Not compatible with CFDP or DTN software; only the ideas are borrowed.
