@@ -13,13 +13,17 @@ from .store import GapError, StreamStore
 
 log = logging.getLogger("rope.hub")
 
+#: Block size and sums per frame for the repair after a mismatch (spec 14.7): 512 sums need about 34 KiB of meta.
+BLOCK_SIZE = 1024 * 1024
+SUMS_PER_FRAME = 512
+
 
 class Hub:
     """``participants``: {identifier: role}. ``on_stream_checked(participant, stream, gen, result, path)`` is called
     after a final check (spec 8.4)."""
 
     def __init__(self, root, participants, operation, hub_id="hub", host="127.0.0.1", port=DEFAULT_PORT,
-                 heartbeat_s=2.0, timeout_s=10.0, on_stream_checked=None):
+                 heartbeat_s=2.0, timeout_s=10.0, on_stream_checked=None, block_size=BLOCK_SIZE):
         self.store = StreamStore(root)
         self.participants = dict(participants)
         self.operation = operation
@@ -29,6 +33,7 @@ class Hub:
         self.heartbeat_s = heartbeat_s
         self.timeout_s = timeout_s
         self.on_stream_checked = on_stream_checked
+        self.block_size = block_size
         self._server = None
         self._sessions = {}           # participant -> task of its current session
         self._connections = set()     # every connection task, also those still greeting
@@ -152,7 +157,7 @@ class Hub:
         data = F.segment_data(f)                        # FrameError on damage -> ERROR, connection closed
         rs = await asyncio.to_thread(self.store.get, participant, m["stream"], m["gen"])
         try:
-            committed = await asyncio.to_thread(rs.write, m["off"], data)
+            committed = await asyncio.to_thread(rs.write, m["off"], data, m.get("repair") is True)
         except GapError as e:
             await ch.send(F.Frame(F.FrameType.RESEND, dict(stream=m["stream"], gen=m["gen"], off=e.committed,
                                                            len=m["off"] + m["len"] - e.committed)))
@@ -167,5 +172,12 @@ class Hub:
         result = await asyncio.to_thread(rs.finish, m["size"], m["sha256"])
         await ch.send(F.Frame(F.FrameType.STREAM_CHECK, dict(stream=m["stream"], gen=m["gen"], result=result,
                                                              size=rs.committed)))
+        if result != "ok":
+            # per-block checksums of what the hub holds, so that the source resends only differing blocks
+            sums = await asyncio.to_thread(rs.block_sums, self.block_size)
+            for first in range(0, max(len(sums), 1), SUMS_PER_FRAME):
+                await ch.send(F.Frame(F.FrameType.BLOCK_SUMS, dict(stream=m["stream"], gen=m["gen"],
+                                                                   block_size=self.block_size, first=first,
+                                                                   sums=sums[first:first + SUMS_PER_FRAME])))
         if self.on_stream_checked:
             self.on_stream_checked(participant, m["stream"], m["gen"], result, rs.path)

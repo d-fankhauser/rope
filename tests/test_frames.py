@@ -157,6 +157,14 @@ def test_unknown_meta_keys_are_ignored():
     assert F.validate(back) is FrameType.HEARTBEAT
 
 
+def test_repair_flag_on_segments():
+    seg = F.segment("s", 1, 0, b"data", 0, repair=True)
+    assert F.validate(seg) is FrameType.SEGMENT and seg.meta["repair"] is True
+    seg.meta["repair"] = "yes"
+    with pytest.raises(FrameError):
+        F.validate(seg)
+
+
 @pytest.mark.parametrize("ftype,change", [
     (FrameType.HELLO, {"role": "admin"}),
     (FrameType.HELLO, {"versions": []}),
