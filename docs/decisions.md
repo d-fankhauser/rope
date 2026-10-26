@@ -2,6 +2,17 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – Messages with custody (proposed)
+- **Every role may send and receive messages**; a recipient only receives no streams. Answers ("understood") come
+  from the same devices that receive tasks.
+- **`MESSAGE` gets `len` and `crc`** (wire format draft 1, changed before any release): `len` bounds the
+  decompression like for segments, `crc` detects damage of the body.
+- **The hub checks `from`** against the connection: no participant can send in another's name by mistake.
+- **"Told" flag in the inbox**: found with 40 messages over the harsh simulated link - if the connection breaks
+  between storing and telling the application, the resent copy is a duplicate and the application would never hear
+  of the message. Untold messages are now told after each received message and at session start (at least once).
+- **Delivery report to the sender** is left open; the sender sees "at the hub".
+
 ### 2026-10-26 – Relaying to consumers (proposed)
 - **The hub sends like a source.** One sender implementation for both links (source → hub, hub → consumer):
   resume, final check and block repair behave the same everywhere and are tested once.

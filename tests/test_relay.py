@@ -8,11 +8,13 @@ import os
 from rope_protocol.consumer import Consumer
 from rope_protocol.hub import Hub
 from rope_protocol.linksim import LinkProxy, Profile
+from rope_protocol.recipient import Recipient
 from test_transfer import FAST, SRC, Bench, _file, _patch_file, _until
 
 HARSH = Profile("harsh", rate=1_000_000, latency=0.01, jitter=0.02, blackout_every=0.4, blackout_len=(0.05, 0.9),
                 disconnect_every=1.0, outage_len=(0.05, 0.3), description="test only")
-PARTICIPANTS = {"source-1": "source", "source-2": "source", "c-1": "consumer", "c-2": "consumer"}
+PARTICIPANTS = {"source-1": "source", "source-2": "source", "c-1": "consumer", "c-2": "consumer",
+                "r-1": "recipient"}
 BLOCK = 64 * 1024
 
 
@@ -32,6 +34,15 @@ class RelayBench(Bench):
                      hub_port=proxy.port, timeout_s=SRC["timeout_s"], backoff=SRC["backoff"], block_size=BLOCK, **kw)
         self.consumers.append(c)
         return c.start()
+
+    async def recipient(self, participant="r-1", profile=None, **kw):
+        proxy = await LinkProxy(("127.0.0.1", 0), ("127.0.0.1", self.hub.port),
+                                profile or self.consumer_profile).start()
+        self.consumer_proxies.append(proxy)
+        r = Recipient(participant, "op-1", "127.0.0.1", os.path.join(self.tmp, "recipient-" + participant),
+                      hub_port=proxy.port, timeout_s=SRC["timeout_s"], backoff=SRC["backoff"], poll_s=0.05, **kw)
+        self.consumers.append(r)
+        return r.start()
 
     async def __aexit__(self, *exc):
         for c in self.consumers:
@@ -176,17 +187,14 @@ def test_relay_over_harsh_links_and_hub_restart(tmp_path, seed=11):
     asyncio.run(run())
 
 
-def test_role_not_served_yet_is_rejected(tmp_path):
-    class Recipient(Consumer):
-        role = "recipient"
-
+def test_wrong_role_is_rejected(tmp_path):
+    """c-1 is listed as consumer but greets as recipient."""
     async def run():
         async with RelayBench(str(tmp_path)) as b:
-            b.hub.participants["r-1"] = "recipient"
-            r = Recipient("r-1", "op-1", "127.0.0.1", os.path.join(b.tmp, "r"), hub_port=b.hub.port,
+            r = Recipient("c-1", "op-1", "127.0.0.1", os.path.join(b.tmp, "r"), hub_port=b.hub.port,
                           timeout_s=SRC["timeout_s"], backoff=SRC["backoff"]).start()
             await _until(lambda: r.rejected is not None, 5)
-            assert r.rejected.code == "role" and "recipient" in r.rejected.text
+            assert r.rejected.code == "role" and "consumer" in r.rejected.text
             await r.stop()
     asyncio.run(run())
 
