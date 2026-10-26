@@ -25,7 +25,7 @@ from . import roster
 from .channel import Channel, now_ms, reap, serve_frames
 from .receiver import BLOCK_SIZE, StreamReceiver
 from .sender import OutStream, StreamSender
-from .store import StreamStore, write_json_atomic
+from .store import Activity, StreamStore, wait_idle, write_json_atomic
 
 log = logging.getLogger("rope.hub")
 
@@ -50,6 +50,7 @@ class Hub:
         self.store = StreamStore(root)
         self._media_have_path = os.path.join(os.path.abspath(root), "media_have.json")
         self._media_lock = threading.Lock()
+        self._activity = Activity()
         self.messages = M.MessageStore(os.path.join(root, "messages"))
         self.participants = {p: e.role for p, e in self.roster.items()}       # {identifier: role}
         self.operation = operation
@@ -100,6 +101,10 @@ class Hub:
                 await asyncio.wait_for(self._server.wait_closed(), 5)
             except asyncio.TimeoutError:
                 log.warning("hub stop: connections did not close within 5 s")
+        # writes started by cancelled sessions finish in their worker threads; wait, so that the state on disk is
+        # final when stop() returns (a new hub on the same folders must not start in the middle of a write)
+        if not await asyncio.to_thread(wait_idle, [self.store.activity, self.messages.activity, self._activity]):
+            log.warning("hub stop: disk writes still running after 5 s")
 
     async def __aenter__(self):
         return await self.start()
@@ -146,7 +151,8 @@ class Hub:
             mail = M.MessageSender(self.messages, lambda: self._mail_for(participant),
                                    lambda msg_id: self._delivered(msg_id, participant), self.poll_s, self.zlib_level)
             mail.reports = M.ReportSender(lambda: self._reports_for(participant),
-                                          lambda msg_id, n: self._report_acked(msg_id, n, participant), self.poll_s)
+                                          lambda msg_id, n: self._report_acked(msg_id, n, participant), self.poll_s,
+                                          self.messages.activity)
             self._mail[participant] = mail
             try:
                 serve = dict(consumer=self._serve_consumer, source=self._serve_source,
@@ -449,7 +455,7 @@ class Hub:
             return {}
 
     def _remember_media_have(self, participant, acks):
-        with self._media_lock:
+        with self._activity, self._media_lock:
             all_have = self._media_have()
             mine = all_have.setdefault(participant, {})
             for stream, gen, committed in acks:

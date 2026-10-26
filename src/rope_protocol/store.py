@@ -13,6 +13,7 @@ Layout below ``root``::
 application are never used as paths (spec 14.4).
 """
 
+import asyncio
 import hashlib
 import json
 import os
@@ -67,13 +68,62 @@ def _fsync_dir(path):
         os.close(fd)
 
 
+class Activity:
+    """Counts disk writes in progress (``with activity:`` around each). A stop waits until there are none, so that a
+    new instance started in the same program afterwards finds the final state on disk - a worker thread keeps writing
+    after the task that started it was cancelled."""
+
+    def __init__(self):
+        self._n = 0
+        self._cond = threading.Condition()
+
+    def __enter__(self):
+        with self._cond:
+            self._n += 1
+
+    def __exit__(self, *exc):
+        with self._cond:
+            self._n -= 1
+            self._cond.notify_all()
+
+    async def run(self, fn, *args, **kwargs):
+        """Like ``asyncio.to_thread(fn, *args)``, but a write once started always completes, and it counts from this
+        call on. Cancelling ``asyncio.to_thread`` drops a job that is still queued in the thread pool - a session
+        ending at that moment lost e.g. the "told" flag of a message, and the next session told it again (found by
+        the test bench on CI, spec 13). The caller still sees the cancellation at once; the write goes on."""
+        self.__enter__()
+
+        def job():
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                self.__exit__()
+        try:
+            inner = asyncio.ensure_future(asyncio.to_thread(job))
+        except BaseException:
+            self.__exit__()
+            raise
+        return await asyncio.shield(inner)
+
+    def wait_idle(self, timeout_s):
+        """True once no write is in progress, False after ``timeout_s``."""
+        with self._cond:
+            return self._cond.wait_for(lambda: self._n == 0, timeout_s)
+
+
+def wait_idle(activities, timeout_s=5.0):
+    """Wait for several Activity objects; True if all became idle in time."""
+    return all([a.wait_idle(timeout_s) for a in activities])
+
+
 class ReceivedStream:
     """One generation of one stream at the receiver. ``StreamStore`` hands out one instance per stream; ``write`` and
     ``finish`` are serialised by a lock, because a replaced session's write may still be running in its worker thread
     while the new session writes the same segment."""
 
-    def __init__(self, folder, participant, stream, gen):
+    def __init__(self, folder, participant, stream, gen, activity=None):
         self.folder = folder
+        self._activity = activity or Activity()
         self.participant = participant
         self.stream = stream
         self.gen = gen
@@ -112,7 +162,7 @@ class ReceivedStream:
         (spec 14.7): then the part below the committed offset overwrites what is stored. A segment that starts beyond
         the committed offset raises GapError.
         """
-        with self._lock:
+        with self._activity, self._lock:
             if off > self.committed:
                 raise GapError(self.committed)
             end = off + len(data)
@@ -141,7 +191,7 @@ class ReceivedStream:
 
     def finish(self, size, sha256):
         """Final check (spec 8.4): returns "ok" or "mismatch" and records it. Bytes are kept either way."""
-        with self._lock:
+        with self._activity, self._lock:
             ok = size == self.committed and sha256 == self._digest()
             self.complete = ok
             self.verified = "ok" if ok else "mismatch"
@@ -182,12 +232,14 @@ class StreamStore:
         self._open = {}
         self._index = None            # state of the streams on disk at the first entries() call
         self._lock = threading.Lock()
+        self.activity = Activity()
 
     def get(self, participant, stream, gen):
         k = _key(participant, stream, gen)
         with self._lock:
             if k not in self._open:
-                self._open[k] = ReceivedStream(os.path.join(self._folder, k), participant, stream, gen)
+                self._open[k] = ReceivedStream(os.path.join(self._folder, k), participant, stream, gen,
+                                               self.activity)
             return self._open[k]
 
     def entries(self):

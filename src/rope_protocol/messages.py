@@ -22,7 +22,7 @@ import uuid
 
 from . import frames as F
 from .channel import Wakeup, now_ms
-from .store import write_json_atomic
+from .store import Activity, write_json_atomic
 
 log = logging.getLogger("rope.messages")
 
@@ -41,6 +41,7 @@ class MessageStore:
         self.root = os.path.abspath(root)
         os.makedirs(self.root, exist_ok=True)
         self._lock = threading.Lock()
+        self.activity = Activity()
         self._items = {}
         for name in sorted(os.listdir(self.root)):
             if name.endswith(".json"):
@@ -57,7 +58,7 @@ class MessageStore:
 
     def put(self, meta, body, state):
         """Take custody: store ``body`` and then ``meta``/``state`` durably. Returns False for a known id."""
-        with self._lock:
+        with self.activity, self._lock:
             if meta["id"] in self._items:
                 return False
             path = os.path.join(self.root, meta["id"] + ".body")
@@ -79,7 +80,7 @@ class MessageStore:
 
     def modify(self, msg_id, change):
         """Apply ``change(state)`` and store the result durably, as one step (no lost updates between threads)."""
-        with self._lock:
+        with self.activity, self._lock:
             rec = self._items.get(msg_id)
             if rec is None:
                 return
@@ -120,7 +121,7 @@ class MessageSender:
     async def handle_ack(self, msg_id):
         if msg_id in self._inflight:
             self._inflight.discard(msg_id)
-            await asyncio.to_thread(self.on_acked, msg_id)
+            await self.store.activity.run(self.on_acked, msg_id)
             self.wake.set()
 
     async def run(self, ch):
@@ -157,9 +158,10 @@ class ReportSender:
     """At the hub: sends the delivery reports ``pending()`` returns to the sender of the messages over one connection
     and records acknowledgements with ``on_acked(msg_id, delivered)`` (called in a worker thread)."""
 
-    def __init__(self, pending, on_acked, poll_s=0.5):
+    def __init__(self, pending, on_acked, poll_s=0.5, activity=None):
         self.pending = pending
         self.on_acked = on_acked
+        self.activity = activity or Activity()
         self.poll_s = poll_s
         self.wake = Wakeup()
         self._inflight = set()
@@ -169,7 +171,7 @@ class ReportSender:
 
     async def handle_ack(self, msg_id, delivered):
         self._inflight.discard(msg_id)
-        await asyncio.to_thread(self.on_acked, msg_id, delivered)
+        await self.activity.run(self.on_acked, msg_id, delivered)
         self.wake.set()
 
     async def run(self, ch):
@@ -190,7 +192,7 @@ async def receive(store, ch, f, state):
     """Store an incoming MESSAGE durably (new ids only), then acknowledge. Returns (meta, body) if it was new."""
     body = F.message_body(f)                            # FrameError on damage -> ERROR, connection closed
     meta = {k: f.meta[k] for k in ("id", "from", "to", "t", "kind")}
-    new = await asyncio.to_thread(store.put, meta, body, state)
+    new = await store.activity.run(store.put, meta, body, state)
     await ch.send(F.Frame(F.FrameType.MESSAGE_ACK, {"id": meta["id"]}))
     return (meta, body) if new else None
 
@@ -245,13 +247,13 @@ class Mailbox:
             for rec in self.store.select(lambda r: r["state"].get("box") == "in" and not r["state"].get("told", True)):
                 msg_id = rec["meta"]["id"]
                 if msg_id in self._told:
-                    await asyncio.to_thread(self.store.update, msg_id, told=True)
+                    await self.store.activity.run(self.store.update, msg_id, told=True)
                     continue
                 body = await asyncio.to_thread(self.store.body, msg_id) if self.on_message else None
                 if self.on_message:
                     self.on_message(rec["meta"], body)
                 self._told.add(msg_id)
-                await asyncio.to_thread(self.store.update, msg_id, told=True)
+                await self.store.activity.run(self.store.update, msg_id, told=True)
             for rec in self.store.select(lambda r: r["state"].get("box") == "out"
                                          and r["state"].get("report_told") is False):
                 msg_id = rec["meta"]["id"]
@@ -260,7 +262,7 @@ class Mailbox:
                     if self.on_delivery:
                         self.on_delivery(msg_id, rec["state"]["report"])
                     self._told.add(key)
-                await asyncio.to_thread(self.store.update, msg_id, report_told=True)
+                await self.store.activity.run(self.store.update, msg_id, report_told=True)
 
     def pending(self):
         """Records of the outbox messages the hub has not taken into custody yet."""
@@ -302,7 +304,7 @@ class Mailbox:
             await self.sender.handle_ack(f.meta["id"])
             return True
         if f.type == F.FrameType.DELIVERY:
-            await asyncio.to_thread(self.take_report, f.meta)
+            await self.store.activity.run(self.take_report, f.meta)
             await ch.send(F.Frame(F.FrameType.DELIVERY_ACK, dict(id=f.meta["id"],
                                                                  delivered=len(f.meta["delivered"]))))
             await self.notify()

@@ -42,7 +42,7 @@ class StreamReceiver:
         data = F.segment_data(f)                        # FrameError on damage -> ERROR, connection closed
         rs = await asyncio.to_thread(self.store.get, self.owner, m["stream"], m["gen"])
         try:
-            committed = await asyncio.to_thread(rs.write, m["off"], data, m.get("repair") is True)
+            committed = await self.store.activity.run(rs.write, m["off"], data, m.get("repair") is True)
         except GapError as e:
             await ch.send(F.Frame(F.FrameType.RESEND, dict(stream=m["stream"], gen=m["gen"], off=e.committed,
                                                            len=m["off"] + m["len"] - e.committed)))
@@ -56,7 +56,7 @@ class StreamReceiver:
 
     async def _stream_end(self, ch, m):
         rs = await asyncio.to_thread(self.store.get, self.owner, m["stream"], m["gen"])
-        result = await asyncio.to_thread(rs.finish, m["size"], m["sha256"])
+        result = await self.store.activity.run(rs.finish, m["size"], m["sha256"])
         if self.on_checked:                 # tell the application as soon as the store says so, not after sending
             self.on_checked(self.owner, m["stream"], m["gen"], result, rs.path)
         await ch.send(F.Frame(F.FrameType.STREAM_CHECK, dict(stream=m["stream"], gen=m["gen"], result=result,

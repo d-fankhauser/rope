@@ -18,6 +18,7 @@ a new one on the same folders - not a power cut, which can lose what the operati
 import asyncio
 import os
 import random
+import threading
 import time
 from collections import Counter
 
@@ -68,13 +69,11 @@ async def scenario(tmp, link="source", fault=None, direction=UP, at=None):
     async def restart(what):
         if what == "restart_hub":
             port = cur["hub"].port
-            await cur["hub"].stop()
-            await asyncio.sleep(0.05)
+            await cur["hub"].stop()                # waits for writes still running (spec 13)
             cur["hub"] = await new_hub(port).start()
             return
         key = "src" if link == "source" else "c"
         await cur[key].stop()
-        await asyncio.sleep(0.05)                       # a restart takes a moment; a write still running finishes
         cur[key] = (new_source if key == "src" else new_consumer)().start()
 
     cur["hub"] = hub = await new_hub(0).start()
@@ -204,6 +203,41 @@ def test_unexpected_error_in_a_session_reconnects(tmp_path):
         finally:
             await r.stop()
             await hub.stop()
+    asyncio.run(run())
+
+
+def test_stop_waits_for_writes_still_running(tmp_path):
+    """A cancelled session's write goes on in its worker thread; stop() returns only when it is on disk, so that a
+    new instance on the same folders starts from the final state."""
+    done = []
+
+    def slow_change(state):
+        time.sleep(0.5)
+        state["late"] = True
+        done.append("written")
+
+    async def run():
+        hub = Hub(os.path.join(str(tmp_path), "hub"), PARTICIPANTS, "op-1")
+        hub.messages.put({"id": "d" * 32, "from": "r-1", "to": ["c-1"], "t": 1, "kind": "note"}, b"x",
+                         {"pending": ["c-1"], "delivered": [], "unknown": []})
+        writing = asyncio.ensure_future(asyncio.to_thread(hub.messages.modify, "d" * 32, slow_change))
+        await asyncio.sleep(0.1)
+        writing.cancel()                                # the session is gone, the thread is not
+        await hub.stop()
+        assert done == ["written"]
+        again = Hub(os.path.join(str(tmp_path), "hub"), PARTICIPANTS, "op-1")
+        assert again.messages.get("d" * 32)["state"]["late"] is True
+
+        c = Consumer("c-1", "op-1", "127.0.0.1", os.path.join(str(tmp_path), "c-1"), hub_port=1, **PEER)
+        rs = c.store.get("hub", "x", 1)
+        threading.Thread(target=lambda: (time.sleep(0.1), rs.write(0, b"y" * 1000))).start()
+        await asyncio.sleep(0.05)
+        with c.store.activity:                          # a write that is still running
+            stopper = asyncio.ensure_future(c.stop())
+            await asyncio.sleep(0.3)
+            assert not stopper.done()
+        await stopper
+        assert c.store.get("hub", "x", 1).committed == 1000
     asyncio.run(run())
 
 

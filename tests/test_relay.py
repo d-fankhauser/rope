@@ -74,9 +74,10 @@ def test_relay_complete_file_bit_for_bit(tmp_path):
             src.complete("rec")
             assert await src.wait_checked("rec", 20) == "ok"
             await _until(lambda: _verified(c, "source-1/rec"))
+            await _until(lambda: checked)               # told in the event loop right after the store has it
             await src.stop()
             assert _content(c, "source-1/rec") == data
-            assert checked and checked[-1][:3] == ("source-1/rec", 1, "ok")
+            assert checked[-1][:3] == ("source-1/rec", 1, "ok")
     asyncio.run(run())
 
 

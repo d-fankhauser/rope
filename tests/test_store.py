@@ -1,5 +1,7 @@
 """Durable receiver storage: committed offset, duplicates, gaps, crash recovery, final check (spec 8.3, 8.4)."""
 
+import asyncio
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -7,7 +9,7 @@ import threading
 
 import pytest
 
-from rope_protocol.store import GapError, StreamStore
+from rope_protocol.store import Activity, GapError, StreamStore
 
 
 def test_write_sequence_duplicates_and_gap(tmp_path):
@@ -83,3 +85,25 @@ def test_generations_are_separate_and_names_are_not_paths(tmp_path):
         if "state.json" in files:
             names.add(json.load(open(os.path.join(root, "state.json")))["stream"])
     assert names == {"../../evil"}
+
+
+def test_a_write_counts_while_still_queued_in_the_thread_pool():
+    """Found by the test bench on CI: a write queued in the thread pool, not yet started, was not counted - stop()
+    returned and the next instance read the old state."""
+    activity = Activity()
+    done = []
+    release = threading.Event()
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=1))
+        blocker = loop.run_in_executor(None, release.wait)             # the only worker is busy
+        write = asyncio.ensure_future(activity.run(done.append, "written"))
+        await asyncio.sleep(0.05)
+        write.cancel()                                                  # the session is gone, the write is queued
+        assert not activity.wait_idle(0.1)                              # ... and counts
+        release.set()
+        await blocker
+        assert await asyncio.to_thread(activity.wait_idle, 2.0)
+        assert done == ["written"]
+    asyncio.run(run())

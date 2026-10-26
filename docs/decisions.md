@@ -2,6 +2,15 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – stop() waits for disk writes still running (decided)
+- A cancelled session's write goes on in its worker thread. Without waiting, a new instance on the same folders could
+  load a state in the middle of a write - for a stream even cut off bytes that the old write then committed.
+- Each store counts its writes in progress; `stop()` waits until none is left (at most 5 s, then a warning). The
+  restart test of the test bench no longer needs a pause between stop and start.
+- **Writes are shielded from cancellation.** Found on CI: cancelling `asyncio.to_thread` drops a job still queued in
+  the thread pool, so the "told" flag of a message was lost and the restarted source told the message again. A write
+  is now counted from the moment it is handed over and always runs to its end.
+
 ### 2026-10-26 – Test bench with a fault at every step (decided)
 - **Frame-aware proxy only in the tests.** The link simulator in the package stays byte-oriented and independent
   of ROPE frames; the frame-aware proxy is a test tool.
