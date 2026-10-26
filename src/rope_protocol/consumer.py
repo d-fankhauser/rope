@@ -50,6 +50,9 @@ class Consumer(Participant):
         """The stored stream (``path``, ``committed``, ``verified``)."""
         return self.store.get(FROM_HUB, stream, gen)
 
+    def _activities(self):
+        return super()._activities() + [self.store.activity]
+
     # --- session ---------------------------------------------------------------------------------------------------
     async def _have(self):
         return await asyncio.to_thread(self.store.have, FROM_HUB)

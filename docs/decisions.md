@@ -2,6 +2,12 @@
 
 Each entry: date, status (**decided** / **proposed**), reason.
 
+### 2026-10-26 – stop() waits for disk writes still running (decided)
+- A cancelled session's write goes on in its worker thread. Without waiting, a new instance on the same folders could
+  load a state in the middle of a write - for a stream even cut off bytes that the old write then committed.
+- Each store counts its writes in progress; `stop()` waits until none is left (at most 5 s, then a warning). The
+  restart test of the test bench no longer needs a pause between stop and start.
+
 ### 2026-10-26 – Test bench with a fault at every step (decided)
 - **Frame-aware proxy only in the tests.** The link simulator in the package stays byte-oriented and independent
   of ROPE frames; the frame-aware proxy is a test tool.

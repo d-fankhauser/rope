@@ -337,6 +337,10 @@ The producer must never hang because of the transfer (**decided**). Measures (**
 - **Fast compression,** e.g. zlib at a low level (**assumed**; to be measured on target hardware).
 - **No in-memory buffer for outages:** the file on disk is the buffer.
 - **Receiver likewise:** writing and syncing are decoupled from display and processing.
+- **A clean stop (decided 2026-10-26):** writes run in worker threads, and a worker thread goes on after the session
+  that started it was cancelled. `stop()` of the hub and of every participant therefore waits until no disk write is
+  running any more (at most 5 s, then it reports it). Afterwards a new instance on the same folders - e.g. a hub
+  restarted inside the same program with a changed participant list - finds the final state.
 
 ## 11. Security considerations
 

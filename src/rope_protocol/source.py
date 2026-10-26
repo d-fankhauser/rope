@@ -130,7 +130,11 @@ class Source(Participant):
         return [s.out for s in self.streams.values()]
 
     async def _save(self):
-        await asyncio.to_thread(write_json_atomic, self._state_path, {n: x.saved() for n, x in self.streams.items()})
+        await asyncio.to_thread(self._write_state, {n: x.saved() for n, x in self.streams.items()})
+
+    def _write_state(self, state):
+        with self._activity:
+            write_json_atomic(self._state_path, state)
 
     # --- offline media (spec 8.6) ------------------------------------------------------------------------------------
     async def _media_streams(self):

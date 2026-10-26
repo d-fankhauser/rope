@@ -14,7 +14,7 @@ from . import media
 from . import roster
 from .channel import Channel, now_ms, reap, serve_frames
 from .messages import Mailbox
-from .store import write_json_atomic
+from .store import Activity, wait_idle, write_json_atomic
 
 log = logging.getLogger("rope.participant")
 
@@ -50,6 +50,7 @@ class Participant:
         self.participant = participant
         self._roster_path = os.path.join(state_dir, "participants.json") if state_dir else None
         self._roster_lock = threading.Lock()    # a greeting and a medium import may learn the list at the same time
+        self._activity = Activity()             # own disk writes (participant list, a source's state)
         self._roster = self._load_roster()
         self.hub_id = "hub"
         self.mailbox = Mailbox(mailbox_root, participant, on_message, poll_s, on_delivery)
@@ -101,7 +102,7 @@ class Participant:
         """Keep the list the hub sent at hub time ``t`` (ms) unless a newer one is known (in a worker thread)."""
         if participants is None or roster.check_public(participants) is not None:
             return
-        with self._roster_lock:
+        with self._activity, self._roster_lock:
             if self._roster and self._roster.get("t", 0) > t:
                 return                              # e.g. an old stick after a newer greeting
             new = {"t": t, "participants": participants}
@@ -126,6 +127,12 @@ class Participant:
                 await self._task
             except BaseException:
                 pass
+        # as for the hub: when stop() returns, no write of this participant is still running
+        if not await asyncio.to_thread(wait_idle, self._activities()):
+            log.warning("%s stop: disk writes still running after 5 s", self.participant)
+
+    def _activities(self):
+        return [self.mailbox.store.activity, self._activity]
 
     def _stopping(self):
         """Hook: wake up loops when stopping."""

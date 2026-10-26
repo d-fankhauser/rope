@@ -22,7 +22,7 @@ import uuid
 
 from . import frames as F
 from .channel import Wakeup, now_ms
-from .store import write_json_atomic
+from .store import Activity, write_json_atomic
 
 log = logging.getLogger("rope.messages")
 
@@ -41,6 +41,7 @@ class MessageStore:
         self.root = os.path.abspath(root)
         os.makedirs(self.root, exist_ok=True)
         self._lock = threading.Lock()
+        self.activity = Activity()
         self._items = {}
         for name in sorted(os.listdir(self.root)):
             if name.endswith(".json"):
@@ -57,7 +58,7 @@ class MessageStore:
 
     def put(self, meta, body, state):
         """Take custody: store ``body`` and then ``meta``/``state`` durably. Returns False for a known id."""
-        with self._lock:
+        with self.activity, self._lock:
             if meta["id"] in self._items:
                 return False
             path = os.path.join(self.root, meta["id"] + ".body")
@@ -79,7 +80,7 @@ class MessageStore:
 
     def modify(self, msg_id, change):
         """Apply ``change(state)`` and store the result durably, as one step (no lost updates between threads)."""
-        with self._lock:
+        with self.activity, self._lock:
             rec = self._items.get(msg_id)
             if rec is None:
                 return
