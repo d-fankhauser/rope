@@ -10,8 +10,9 @@ import logging
 import os
 
 from . import DEFAULT_PORT
+from . import media
 from .participant import Participant, Rejected
-from .sender import OutStream, StreamSender
+from .sender import OutStream, StreamSender, differing_blocks
 from .store import write_json_atomic
 
 __all__ = ["Source", "SourceStream", "Rejected"]
@@ -82,6 +83,11 @@ class Source(Participant):
                          mailbox_root=os.path.join(state_dir, "messages"), on_message=on_message, poll_s=poll_s,
                          state_dir=state_dir, on_delivery=on_delivery)
         self._state_path = os.path.join(state_dir, "source_state.json")
+        self._repairs_path = os.path.join(state_dir, "media_repairs.json")
+        self._repairs = {}                      # block repairs the hub asked for in a bundle (spec 8.6)
+        if os.path.exists(self._repairs_path):
+            with open(self._repairs_path, encoding="utf-8") as f:
+                self._repairs = json.load(f)
         saved = {}
         if os.path.exists(self._state_path):
             with open(self._state_path, encoding="utf-8") as f:
@@ -157,6 +163,41 @@ class Source(Participant):
                 s.out.acked = max(s.out.acked, committed)
         if report.acks:
             self.sender.wake.set()
+        asked = media.complete_requests(report.repair_requests)
+        if asked:                                       # the next bundle carries the differing blocks
+            self._repairs.update(asked)
+            await self._activity.run(write_json_atomic, self._repairs_path, dict(self._repairs))
+
+    async def _media_repairs(self):
+        """Repairs for the next bundle. If most blocks differ, the file was replaced: a new generation instead, as on
+        the network (spec 14.7)."""
+        out = []
+        dropped = False
+        for key, req in list(self._repairs.items()):
+            name, gen = media.split_key(key)
+            s = self.streams.get(name)
+            if s is None or s.gen != gen:
+                del self._repairs[key]
+                dropped = True
+                continue
+            diff = await asyncio.to_thread(differing_blocks, s.path, req["block_size"], req["sums"], req["size"])
+            if req["sums"] and len(diff) * 2 > len(req["sums"]):
+                s.new_generation("changed in most of its blocks (reported in a bundle)")
+                await self._save()
+                del self._repairs[key]
+                dropped = True
+                continue
+            out.append((name, gen, s.path, req))
+        if dropped:
+            await self._activity.run(write_json_atomic, self._repairs_path, dict(self._repairs))
+        return out
+
+    async def _media_exported(self, report):
+        done = ["%s\0%d" % (name, gen) for name, gen, _n, _count in report.repaired]
+        if done:                                        # the hub asks again if the stick never arrives
+            for key in done:
+                self._repairs.pop(key, None)
+            await self._activity.run(write_json_atomic, self._repairs_path, dict(self._repairs))
 
     async def _replaced(self, out):
         """Most blocks differ at the hub: the file was replaced, not edited - keep the hub's version, start over."""

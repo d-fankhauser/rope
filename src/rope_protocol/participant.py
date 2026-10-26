@@ -210,10 +210,14 @@ class Participant:
         hub acknowledged, a consumer what it holds). ``max_bytes`` limits the bundle; the report says whether
         everything fitted. Returns an ExportReport."""
         acks = await self._media_acks()
+        checks = await self._media_checks()
+        repairs = await self._media_repairs()
         streams = await self._media_streams()
-        return await asyncio.to_thread(self._export_media, medium, max_bytes, acks, streams)
+        report = await asyncio.to_thread(self._export_media, medium, max_bytes, acks, streams, checks, repairs)
+        await self._media_exported(report)
+        return report
 
-    def _export_media(self, medium, max_bytes, acks, streams):
+    def _export_media(self, medium, max_bytes, acks, streams, checks=(), repairs=()):
         box = self.mailbox.store
         w = media.BundleWriter(medium, self.operation, self.participant, self.hub_id, max_bytes)
         try:
@@ -222,7 +226,16 @@ class Participant:
             frames += self.mailbox.report_acks()
             frames += [F.Frame(F.FrameType.ACK, dict(stream=s, gen=g, committed=c)) for s, g, c in acks]
             ok = all(w.add(f) for f in frames)
+            for name, gen, rs, block_size in checks:
+                ok = ok and media.add_check_request(w, name, gen, rs, block_size)
             ok = ok and media.add_messages(w, box, self.mailbox.pending())
+            w.report.repaired = []
+            for name, gen, path, req in repairs:
+                if not ok:
+                    break
+                ok, n, count = media.add_repair(w, name, gen, path, req)
+                if ok:
+                    w.report.repaired.append((name, gen, n, count))
             for name, gen, path, start, limit, final_size in streams:
                 ok = ok and media.add_stream(w, name, gen, path, start, limit, final_size)
             return w.close()
@@ -263,6 +276,8 @@ class Participant:
             elif f.type == F.FrameType.DELIVERY:
                 if self.mailbox.take_report(m):
                     report.deliveries.append(m["id"])
+            elif media.collect_repair_frame(f, report.repair_requests):
+                pass                                # a receiver asks this sender for a block repair
             elif f.type == F.FrameType.ACK:
                 report.acks.append((m["stream"], m["gen"], m["committed"]))
             elif not self._media_frame(f, report, skipped):
@@ -276,6 +291,18 @@ class Participant:
     async def _media_streams(self):
         """[(name, gen, path, start, limit, final_size)] to export."""
         return []
+
+    async def _media_checks(self):
+        """[(name, gen, ReceivedStream, block_size)] of received streams whose final check failed: the bundle asks
+        the sender to repair them (STREAM_CHECK + BLOCK_SUMS)."""
+        return []
+
+    async def _media_repairs(self):
+        """[(name, gen, path, request)] of block repairs a receiver asked this sender for."""
+        return []
+
+    async def _media_exported(self, report):
+        """Hook after a bundle was written (``report.repaired``: repairs that fitted)."""
 
     def _media_frame(self, f, report, skipped):
         """Import a role-specific frame (in a worker thread). False if the role does not take it."""

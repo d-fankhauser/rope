@@ -49,6 +49,7 @@ class Hub:
         self.roster = roster.parse(participants, hub_id, hub_name)
         self.store = StreamStore(root)
         self._media_have_path = os.path.join(os.path.abspath(root), "media_have.json")
+        self._media_repairs_path = os.path.join(os.path.abspath(root), "media_repairs.json")
         self._media_lock = threading.Lock()
         self._activity = Activity()
         self.messages = M.MessageStore(os.path.join(root, "messages"))
@@ -403,10 +404,15 @@ class Hub:
                 report.delivery_acks.append(m["id"])
             elif f.type == F.FrameType.ACK and role == "consumer":
                 report.acks.append((m["stream"], m["gen"], m["committed"]))
+            elif role == "consumer" and media.collect_repair_frame(f, report.repair_requests):
+                pass                                    # the consumer asks for a block repair (spec 8.6)
             else:
                 report.problems.append("unexpected %s from a %s - skipped" % (F.FrameType(f.type).name, role))
         if report.acks:
             self._remember_media_have(sender, report.acks)
+        asked = media.complete_requests(report.repair_requests)
+        if asked:
+            self._change_media_repairs(lambda all_req: all_req.setdefault(sender, {}).update(asked))
         return report
 
     async def export_media(self, medium, participant, max_bytes=None):
@@ -428,7 +434,26 @@ class Hub:
             if role == "source":
                 frames += [F.Frame(F.FrameType.ACK, h) for h in self.store.have(participant)]
             ok = all(w.add(f) for f in frames)
+            if role == "source":                        # ask the source to repair what failed its final check here
+                for e in self.store.entries():
+                    if e["participant"] == participant and e["verified"] == "mismatch":
+                        ok = ok and media.add_check_request(w, e["stream"], e["gen"],
+                                                            self.store.get(participant, e["stream"], e["gen"]),
+                                                            self.block_size)
             ok = ok and media.add_messages(w, self.messages, self._mail_for(participant), self.zlib_level)
+            w.report.repaired = []
+            if role == "consumer":
+                # repairs the consumer asked for, from the hub's verified copy, before the streams' final checks
+                entries = {(relayed_name(e["participant"], e["stream"]), e["gen"]): e for e in self.store.entries()
+                           if self.participants.get(e["participant"]) == "source"}
+                for key, req in self._media_repairs().get(participant, {}).items():
+                    e = entries.get(media.split_key(key))
+                    if not ok or e is None or e["verified"] != "ok":
+                        continue
+                    ok, n, count = media.add_repair(w, relayed_name(e["participant"], e["stream"]), e["gen"],
+                                                    e["path"], req, self.zlib_level)
+                    if ok:
+                        w.report.repaired.append(media.split_key(key) + (n, count))
             if role == "consumer":
                 have = self._media_have().get(participant, {})
                 for e in sorted(self.store.entries(), key=lambda e: (e["participant"], e["stream"], e["gen"])):
@@ -441,10 +466,28 @@ class Hub:
                     final = e["committed"] if e["complete"] and e["verified"] == "ok" else None
                     ok = ok and media.add_stream(w, name, e["gen"], e["path"], start, e["committed"], final,
                                                  self.zlib_level)
-            return w.close(participants=self.participant_list())
+            report = w.close(participants=self.participant_list())
         except BaseException:
             w.abort()
             raise
+        done = ["%s\0%d" % (name, gen) for name, gen, _n, _count in report.repaired]
+        if done:                                        # the consumer asks again if the stick never arrives
+            self._change_media_repairs(lambda all_req: [all_req.get(participant, {}).pop(k, None) for k in done])
+        return report
+
+    def _media_repairs(self):
+        """{consumer: {"<stream>\\0<gen>": {size, block_size, sums}}}: block repairs consumers asked for in bundles."""
+        try:
+            with open(self._media_repairs_path, encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+
+    def _change_media_repairs(self, change):
+        with self._activity, self._media_lock:
+            all_req = self._media_repairs()
+            change(all_req)
+            write_json_atomic(self._media_repairs_path, all_req)
 
     def _media_have(self):
         """{consumer: {"<stream>\\0<gen>": committed}} as last reported in bundles."""
