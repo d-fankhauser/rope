@@ -18,7 +18,7 @@ an interruption costs time, never data.
 
 > **Status:** early development. The [specification](docs/spec.md) is draft 1 with a proposed wire format. Streams
 > from sources via the hub to consumers work, including resume after disconnects and restarts and block repair, and
-> so do messages with custody; offline media are still to come. Interfaces will change.
+> so do messages with custody and offline media (e.g. a USB stick) as a second path. Interfaces will change.
 
 ## Why
 
@@ -59,6 +59,8 @@ ROPE has **no encryption** by design and is meant for closed networks – see
 4. When a stream is complete, a final checksum confirms the whole file; on a difference, only the differing blocks
    are resent.
 5. On any disconnect: reconnect, greet, continue from the committed offset.
+6. Without a network, a participant and the hub exchange the same frames as bundles on removable media
+   (`export_media`, `import_media`); network and media mix freely.
 
 Details: [docs/spec.md](docs/spec.md).
 
@@ -104,7 +106,7 @@ ROPE's default port is **47310**; applications can override it.
 | `docs/ideas.md` | Ideas not yet planned |
 | `docs/images/` | Logo and symbol (SVG; light and dark variant) |
 | `TASKS.md` | Task board |
-| `src/rope_protocol/` | Package: frame codec (`frames.py`), link simulator (`linksim.py`), durable store (`store.py`), sending and receiving side of streams (`sender.py`, `receiver.py`), messages (`messages.py`), participants (`hub.py`, `source.py`, `consumer.py`, `recipient.py`, base `participant.py`) |
+| `src/rope_protocol/` | Package: frame codec (`frames.py`), link simulator (`linksim.py`), durable store (`store.py`), sending and receiving side of streams (`sender.py`, `receiver.py`), messages (`messages.py`), offline media (`media.py`), participants (`hub.py`, `source.py`, `consumer.py`, `recipient.py`, base `participant.py`) |
 | `tests/` | Unit tests and, later, the fault-injection test bench |
 | `AGENTS.md` | Guidelines for contributors and coding agents |
 
@@ -116,8 +118,8 @@ file arrives bit-for-bit identical and every message exactly once.
 
 ## Limitations
 
-- Early development: streams and messages work; offline media do not exist yet. Interfaces and the wire format may
-  still change.
+- Early development: streams, messages and offline media work. Interfaces and the wire format may still change.
+- No block repair over offline media: a stream that differs after an import is repaired over the network.
 - Not a general file synchronisation tool and not meant for the internet.
 - No encryption, no authentication beyond a participant list.
 - Not compatible with CFDP or DTN software; only the ideas are borrowed.

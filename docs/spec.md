@@ -209,6 +209,59 @@ All numbers are **proposed** starting values until measured.
 Removable media (e.g. a USB stick) can carry the same segments and messages. Import follows the same rules: check the
 committed offset, ignore duplicates, report damaged items. Network and media may be mixed.
 
+**First implementation (2026-10-26, proposed):**
+
+- **Bundle:** one export writes one bundle. It holds the frames the exporter would send over the network, in the
+  wire format of §14:
+  - `SEGMENT`, `STREAM_END` and `MESSAGE`,
+  - plus receipts for what it holds from the other side: `ACK` (committed offsets) and `MESSAGE_ACK`.
+  - The core decides nothing new for media; only the way the frames travel is different.
+- **Who exchanges with whom:** as on the network, always a participant and the hub (star, §7).
+  - A participant exports for the hub and imports what the hub exported for it.
+  - The hub imports bundles from all participants and exports one bundle per participant.
+- **Layout on the medium:** `rope/<operation>/<from>-to-<to>-<created ms>-<random>/`, with the frames in
+  `frames-0001.rope`, … and a manifest `bundle.json` (`format`, `operation`, `from`, `to`, `created`, `files`,
+  `frames`, `complete`).
+  - At most 1 GiB per frames file, because many sticks use FAT32 (limit 4 GiB per file).
+  - A bundle is written under a name ending in `.partial` and renamed when it is complete and durable. A medium
+    pulled out during the export therefore never holds a half bundle under a valid name.
+  - ROPE never deletes a bundle from a medium. The application decides when a stick is cleared.
+- **What a bundle carries:**
+
+  | Direction | Content |
+  |---|---|
+  | source → hub | streams not yet verified at the hub, from the offset the hub last acknowledged (over the network or by a receipt on a medium; from 0 after a restart of the source); `STREAM_END` once the stream is complete and fully in the bundle |
+  | consumer → hub | its committed offsets as `ACK` |
+  | hub → source | the hub's committed offsets of that source's streams as `ACK`, so that the next bundle of the source is smaller |
+  | hub → consumer | the relayed streams (§7), from the offsets the consumer last reported in a bundle (from 0 if it never did); `STREAM_END` only for streams verified at the hub |
+  | everybody, both ways | messages for the addressee not yet in custody there, and `MESSAGE_ACK` for messages received from the addressee |
+
+  Order inside a bundle: receipts, then messages, then streams. If the medium is too small (`max_bytes`), the export
+  stops at a frame boundary and reports `complete: false`; the rest goes with the next bundle.
+- **Import:**
+  - Bundles are imported oldest first. Importing a bundle again changes nothing.
+  - Segments are stored as from the network (§8.3): durably, duplicates ignored. A segment beyond the committed
+    offset is a gap: the rest of that stream in the bundle is skipped and reported, the bytes must come first from
+    an earlier bundle or the network.
+  - Frames are read one at a time. A frame with a wrong CRC is skipped and reported; its length is known, so
+    reading goes on (later segments of that stream then usually meet a gap). A damaged frame header ends the reading
+    of its file, because the position of the next frame is lost. A cut-off file is reported.
+  - A bundle whose manifest cannot be read is reported by every participant that looks at the medium: nobody can
+    tell for whom it was.
+  - The hub accepts only bundles from participants on its list, and only messages written by the bundle's sender
+    (§8.5).
+  - A received message is told to the application once, also if the same message arrives by medium and by network
+    at the same time.
+- **Limits of the first implementation:**
+  - No block repair over media. Repair needs the receiver's block sums first, i.e. a round trip. A final check that
+    fails after an import is repaired over the network (§14.7).
+  - A `STREAM_END` from a medium never overrides a stream that is already verified: the bundle may be older than a
+    repair over the network.
+  - A participant's message counts as "at the hub" only after a receipt from the hub (network or medium). Until then
+    every export carries it again; the hub ignores the duplicates.
+  - The hub keeps what a consumer last reported in a bundle (`media_have.json`). That is state per consumer, but for
+    media only. On the network the consumer still reports in `HELLO` (§7).
+
 ## 9. Interruptions and resumption
 
 Core idea: the data lives on the source's disk and the receiver knows its committed offset. An interruption costs time,
@@ -272,7 +325,9 @@ VPN). The participant list prevents accidental mix-ups, not attacks.
 | Wrong operation | operation identifier | store separately, never mix |
 | Receiver disk full | write fails | do not acknowledge, report; source waits |
 | Recipient offline | no acknowledgement | hub keeps custody and delivers later |
-| Hub offline | no connection | participants keep collecting; offline media as fallback |
+| Hub offline | no connection | participants keep collecting; offline media as fallback (§8.6) |
+| Damaged or cut-off medium | frame CRC, frame count | keep everything before the damage, report the rest |
+| Bundle without its predecessor | segment beyond the committed offset | skip that stream in the bundle, report the gap |
 
 ## 13. Test bench (proposed)
 
@@ -477,6 +532,8 @@ Status: **proposed** (block size, the half rule and the 3 rounds are assumptions
 - [ ] Which consumer receives which streams. First implementation: every consumer receives every stream of the
       operation (participant list §7 may later name what each participant receives).
 - [ ] Hub failure: standby hub or offline media only.
+- [ ] Offline media: block repair over media (needs two trips of the stick), and whether the core should help the
+      application decide when a bundle on a stick can be deleted.
 
 **To measure**
 

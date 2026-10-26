@@ -9,6 +9,8 @@ import asyncio
 import os
 
 from . import DEFAULT_PORT
+from . import frames as F
+from . import media
 from .participant import Participant
 from .receiver import BLOCK_SIZE, StreamReceiver
 from .store import StreamStore
@@ -54,6 +56,26 @@ class Consumer(Participant):
         async def handle(f):
             return await self.receiver.handle(ch, f)
         return [self._serve(ch, handle)]
+
+    # --- offline media (spec 8.6) ------------------------------------------------------------------------------------
+    async def _media_acks(self):
+        """What this consumer holds: the hub's next bundle for it starts there."""
+        return [(h["stream"], h["gen"], h["committed"]) for h in await self._have()]
+
+    def _media_frame(self, f, report, skipped):
+        if f.type == F.FrameType.SEGMENT:
+            media.import_segment(self.store, FROM_HUB, f, report, skipped)
+        elif f.type == F.FrameType.STREAM_END:
+            media.import_stream_end(self.store, FROM_HUB, f, report, skipped)
+        else:
+            return False
+        return True
+
+    async def _media_imported(self, report):
+        for owner, stream, gen, committed in report.written:
+            self._written(owner, stream, gen, committed)
+        for owner, stream, gen, result, path in report.checked:
+            self._checked(owner, stream, gen, result, path)
 
     def _written(self, owner, stream, gen, committed):
         if self.on_written:

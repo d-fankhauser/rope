@@ -4,19 +4,26 @@ consumers; takes custody of messages and delivers them to each recipient (spec 7
 To a consumer, the hub is a sender like a source is to the hub: same window, resume, final check and block repair
 (``rope_protocol.sender``). A relayed stream is named ``<source>/<stream>`` so that streams of different sources never
 mix. The hub keeps no state per consumer: the consumer reports what it holds when it greets (spec 14.5).
+
+Offline media (spec 8.6): ``import_media`` reads the bundles of all participants, ``export_media`` writes one for a
+participant. For media only, the hub remembers what a consumer last reported in a bundle (``media_have.json``), so
+that its next bundle starts there.
 """
 
 import asyncio
+import json
 import logging
 import os
+import threading
 
 from . import PROTOCOL_VERSION, DEFAULT_PORT
 from . import frames as F
+from . import media
 from . import messages as M
 from .channel import Channel, now_ms, reap, serve_frames
 from .receiver import BLOCK_SIZE, StreamReceiver
 from .sender import OutStream, StreamSender
-from .store import StreamStore
+from .store import StreamStore, write_json_atomic
 
 log = logging.getLogger("rope.hub")
 
@@ -36,6 +43,8 @@ class Hub:
                  heartbeat_s=2.0, timeout_s=10.0, on_stream_checked=None, block_size=BLOCK_SIZE,
                  segment_bytes=256 * 1024, window=8, poll_s=0.5, zlib_level=1):
         self.store = StreamStore(root)
+        self._media_have_path = os.path.join(os.path.abspath(root), "media_have.json")
+        self._media_lock = threading.Lock()
         self.messages = M.MessageStore(os.path.join(root, "messages"))
         self.participants = dict(participants)
         self.operation = operation
@@ -236,22 +245,27 @@ class Hub:
         if f.type == F.FrameType.MESSAGE:
             if f.meta["from"] != participant:
                 raise F.FrameError("bad_frame", "%s sent a message from %s" % (participant, f.meta["from"]))
-            to = f.meta["to"]
-            known = [p for p in dict.fromkeys(to) if p in self.participants and p != participant]
-            unknown = [p for p in dict.fromkeys(to) if p not in self.participants]
-            got = await M.receive(self.messages, ch, f, dict(pending=known, delivered=[], unknown=unknown))
-            if got:
-                if unknown:
-                    log.warning("message %s from %s: %s not on the participant list, not delivered",
-                                f.meta["id"], participant, ", ".join(unknown))
-                for p in known:
-                    if p in self._mail:
-                        self._mail[p].wake.set()
+            state = self._custody_state(participant, f.meta["to"])
+            if await M.receive(self.messages, ch, f, state):
+                self._new_message(f.meta, state)
             return True
         if f.type == F.FrameType.MESSAGE_ACK:
             await mail.handle_ack(f.meta["id"])
             return True
         return False
+
+    def _custody_state(self, sender, to):
+        """State of a new message at the hub: known recipients pending, the others unknown (spec 8.5)."""
+        return dict(pending=[p for p in dict.fromkeys(to) if p in self.participants and p != sender], delivered=[],
+                    unknown=[p for p in dict.fromkeys(to) if p not in self.participants])
+
+    def _new_message(self, meta, state):
+        if state["unknown"]:
+            log.warning("message %s from %s: %s not on the participant list, not delivered",
+                        meta["id"], meta["from"], ", ".join(state["unknown"]))
+        for p in state["pending"]:
+            if p in self._mail:
+                self._mail[p].wake.set()
 
     def _mail_for(self, participant):
         return self.messages.select(lambda r: participant in r["state"].get("pending", ()))
@@ -267,3 +281,109 @@ class Hub:
         """{pending, delivered, unknown} of a message the hub holds, or None."""
         rec = self.messages.get(msg_id)
         return None if rec is None else rec["state"]
+
+    # --- offline media (spec 8.6) --------------------------------------------------------------------------------
+    async def import_media(self, medium):
+        """Import every bundle on ``medium`` addressed to this hub, oldest first, as if it had arrived over the
+        network: streams from sources, messages from everyone, receipts. Importing a bundle again changes nothing.
+        Returns one ImportReport per bundle; ``problems`` lists what was skipped and why."""
+        reports = []
+        for path, manifest in await asyncio.to_thread(media.find_bundles, medium, self.operation, self.hub_id):
+            report = await asyncio.to_thread(self._import_media, path, manifest)
+            if report.written:
+                self._written()
+            if self.on_stream_checked:
+                for owner, stream, gen, result, data_path in report.checked:
+                    self.on_stream_checked(owner, stream, gen, result, data_path)
+            for meta in report.messages:
+                self._new_message(meta, self.messages.get(meta["id"])["state"])
+            if report.problems:
+                log.warning("bundle %s: %s", path, "; ".join(report.problems))
+            reports.append(report)
+        return reports
+
+    def _import_media(self, path, manifest):
+        report = media.ImportReport(path, manifest)
+        reason = media.check_manifest(manifest, self.operation, self.hub_id)
+        sender = manifest and manifest.get("from")
+        if reason is None and sender not in self.participants:
+            reason = "the bundle is from %s, who is not on the participant list of this hub" % sender
+        if reason:
+            report.problems.append(reason)
+            return report
+        role = self.participants[sender]
+        skipped = set()
+        for f in media.read_frames(path, manifest, report):
+            m = f.meta
+            if f.type in (F.FrameType.SEGMENT, F.FrameType.STREAM_END) and role == "source":
+                if len(relayed_name(sender, m["stream"]).encode("utf-8")) > MAX_STREAM_BYTES:
+                    if (m["stream"], m["gen"]) not in skipped:
+                        report.problems.append("stream name %r is too long to relay - skipped" % m["stream"])
+                        skipped.add((m["stream"], m["gen"]))
+                elif f.type == F.FrameType.SEGMENT:
+                    media.import_segment(self.store, sender, f, report, skipped)
+                else:
+                    media.import_stream_end(self.store, sender, f, report, skipped)
+            elif f.type == F.FrameType.MESSAGE:
+                media.import_message(self.messages, f, report, self._custody_state(sender, m["to"]), sender)
+            elif f.type == F.FrameType.MESSAGE_ACK:
+                self._delivered(m["id"], sender)
+                report.message_acks.append(m["id"])
+            elif f.type == F.FrameType.ACK and role == "consumer":
+                report.acks.append((m["stream"], m["gen"], m["committed"]))
+            else:
+                report.problems.append("unexpected %s from a %s - skipped" % (F.FrameType(f.type).name, role))
+        if report.acks:
+            self._remember_media_have(sender, report.acks)
+        return report
+
+    async def export_media(self, medium, participant, max_bytes=None):
+        """Write a bundle for ``participant`` to the folder ``medium``: messages pending for it, receipts for the
+        messages it sent, and what the role needs (a source: what the hub holds of its streams; a consumer: the
+        relayed streams from what it last reported in a bundle, final checks only for streams verified here).
+        ``max_bytes`` limits the bundle; the report says whether everything fitted. Returns an ExportReport."""
+        role = self.participants.get(participant)
+        if role is None:
+            raise ValueError("%s is not on the participant list of this hub" % participant)
+        return await asyncio.to_thread(self._export_media, medium, participant, role, max_bytes)
+
+    def _export_media(self, medium, participant, role, max_bytes):
+        w = media.BundleWriter(medium, self.operation, self.hub_id, participant, max_bytes)
+        try:
+            receipts = self.messages.select(lambda r: r["meta"]["from"] == participant)
+            frames = [F.Frame(F.FrameType.MESSAGE_ACK, {"id": r["meta"]["id"]}) for r in receipts]
+            if role == "source":
+                frames += [F.Frame(F.FrameType.ACK, h) for h in self.store.have(participant)]
+            ok = all(w.add(f) for f in frames)
+            ok = ok and media.add_messages(w, self.messages, self._mail_for(participant), self.zlib_level)
+            if role == "consumer":
+                have = self._media_have().get(participant, {})
+                for e in sorted(self.store.entries(), key=lambda e: (e["participant"], e["stream"], e["gen"])):
+                    if self.participants.get(e["participant"]) != "source":
+                        continue
+                    name = relayed_name(e["participant"], e["stream"])
+                    start = min(have.get("%s\0%d" % (name, e["gen"]), 0), e["committed"])
+                    final = e["committed"] if e["complete"] and e["verified"] == "ok" else None
+                    ok = ok and media.add_stream(w, name, e["gen"], e["path"], start, e["committed"], final,
+                                                 self.zlib_level)
+            return w.close()
+        except BaseException:
+            w.abort()
+            raise
+
+    def _media_have(self):
+        """{consumer: {"<stream>\\0<gen>": committed}} as last reported in bundles."""
+        try:
+            with open(self._media_have_path, encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+
+    def _remember_media_have(self, participant, acks):
+        with self._media_lock:
+            all_have = self._media_have()
+            mine = all_have.setdefault(participant, {})
+            for stream, gen, committed in acks:
+                k = "%s\0%d" % (stream, gen)
+                mine[k] = max(mine.get(k, 0), committed)
+            write_json_atomic(self._media_have_path, all_have)
