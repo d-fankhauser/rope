@@ -3,7 +3,8 @@ consumers; takes custody of messages and delivers them to each recipient (spec 7
 
 To a consumer, the hub is a sender like a source is to the hub: same window, resume, final check and block repair
 (``rope_protocol.sender``). A relayed stream is named ``<source>/<stream>`` so that streams of different sources never
-mix. The hub keeps no state per consumer: the consumer reports what it holds when it greets (spec 14.5).
+mix. The hub keeps no state per consumer: the consumer reports what it holds when it greets (spec 14.5). The
+participant list (``rope_protocol.roster``) may restrict which streams a consumer receives.
 
 Offline media (spec 8.6): ``import_media`` reads the bundles of all participants, ``export_media`` writes one for a
 participant. For media only, the hub remembers what a consumer last reported in a bundle (``media_have.json``), so
@@ -20,6 +21,7 @@ from . import PROTOCOL_VERSION, DEFAULT_PORT
 from . import frames as F
 from . import media
 from . import messages as M
+from . import roster
 from .channel import Channel, now_ms, reap, serve_frames
 from .receiver import BLOCK_SIZE, StreamReceiver
 from .sender import OutStream, StreamSender
@@ -36,19 +38,23 @@ def relayed_name(source, stream):
 
 
 class Hub:
-    """``participants``: {identifier: role}. ``on_stream_checked(participant, stream, gen, result, path)`` is called
-    after the final check of a source's stream (spec 8.4)."""
+    """``participants``: {identifier: role} or {identifier: {"role", "name", "streams"}} (``rope_protocol.roster``,
+    spec 7); ValueError with a plain-language reason if the list is not valid. ``hub_name`` is the hub's name for the
+    operator. ``on_stream_checked(participant, stream, gen, result, path)`` is called after the final check of a
+    source's stream (spec 8.4)."""
 
     def __init__(self, root, participants, operation, hub_id="hub", host="127.0.0.1", port=DEFAULT_PORT,
                  heartbeat_s=2.0, timeout_s=10.0, on_stream_checked=None, block_size=BLOCK_SIZE,
-                 segment_bytes=256 * 1024, window=8, poll_s=0.5, zlib_level=1):
+                 segment_bytes=256 * 1024, window=8, poll_s=0.5, zlib_level=1, hub_name=None):
+        self.roster = roster.parse(participants, hub_id, hub_name)
         self.store = StreamStore(root)
         self._media_have_path = os.path.join(os.path.abspath(root), "media_have.json")
         self._media_lock = threading.Lock()
         self.messages = M.MessageStore(os.path.join(root, "messages"))
-        self.participants = dict(participants)
+        self.participants = {p: e.role for p, e in self.roster.items()}       # {identifier: role}
         self.operation = operation
         self.hub_id = hub_id
+        self.hub_name = hub_name
         self.host = host
         self.port = port
         self.heartbeat_s = heartbeat_s
@@ -127,7 +133,7 @@ class Hub:
             have = await asyncio.to_thread(self.store.have, participant)
             await ch.send(F.Frame(F.FrameType.WELCOME, dict(
                 version=ch.version, hub=self.hub_id, t=now_ms(), t_hello=m["t"], heartbeat_s=self.heartbeat_s,
-                timeout_s=self.timeout_s, have=have)))
+                timeout_s=self.timeout_s, have=have, participants=self.participant_list())))
             mail = M.MessageSender(self.messages, lambda: self._mail_for(participant),
                                    lambda msg_id: self._delivered(msg_id, participant), self.poll_s, self.zlib_level)
             self._mail[participant] = mail
@@ -162,10 +168,19 @@ class Hub:
             return "version", "%s speaks protocol versions %s, this hub speaks %d" % (p, m["versions"],
                                                                                      PROTOCOL_VERSION)
         if m["role"] != self.participants[p]:
-            return "role", "%s greets as %s but is listed as %s" % (p, m["role"], self.participants[p])
+            return "role", "%s (%s) greets as %s but is listed as %s" % (p, self.roster[p].name, m["role"],
+                                                                         self.participants[p])
         if m["role"] not in ("source", "consumer", "recipient"):
             return "role", "this hub does not serve the role %s" % m["role"]
         return None
+
+    def participant_list(self):
+        """[{participant, name, role}] as every participant learns it, the hub first (role ``hub``)."""
+        return roster.public(self.roster, self.hub_id, self.hub_name)
+
+    def receives(self, participant, stream):
+        """True if ``participant`` receives the relayed stream ``<source>/<stream>`` (spec 7)."""
+        return roster.receives(self.roster.get(participant), stream)
 
     async def _run_session(self, ch, participant, mail, handle, tasks=()):
         """Receive frames (messages first, then ``handle``) and run the session's tasks, plus heartbeat and message
@@ -213,6 +228,8 @@ class Hub:
                 if self.participants.get(e["participant"]) != "source":
                     continue
                 key = (relayed_name(e["participant"], e["stream"]), e["gen"])
+                if not self.receives(participant, key[0]):
+                    continue
                 out = outs.get(key)
                 if out is None:
                     out = outs[key] = OutStream(key[0], key[1], e["path"])
@@ -362,11 +379,13 @@ class Hub:
                     if self.participants.get(e["participant"]) != "source":
                         continue
                     name = relayed_name(e["participant"], e["stream"])
+                    if not self.receives(participant, name):
+                        continue
                     start = min(have.get("%s\0%d" % (name, e["gen"]), 0), e["committed"])
                     final = e["committed"] if e["complete"] and e["verified"] == "ok" else None
                     ok = ok and media.add_stream(w, name, e["gen"], e["path"], start, e["committed"], final,
                                                  self.zlib_level)
-            return w.close()
+            return w.close(participants=self.participant_list())
         except BaseException:
             w.abort()
             raise

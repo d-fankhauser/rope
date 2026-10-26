@@ -2,14 +2,19 @@
 run the session, reconnect with back-off (spec 8.1, 9); export to and import from offline media (spec 8.6)."""
 
 import asyncio
+import json
 import logging
+import os
 import random
+import threading
 
 from . import PROTOCOL_VERSION, DEFAULT_PORT
 from . import frames as F
 from . import media
+from . import roster
 from .channel import Channel, now_ms, reap, serve_frames
 from .messages import Mailbox
+from .store import write_json_atomic
 
 log = logging.getLogger("rope.participant")
 
@@ -32,13 +37,19 @@ class Participant:
 
     Offline media (spec 8.6): ``export_media`` writes a bundle for the hub, ``import_media`` reads the bundles the hub
     wrote for this participant. ``hub_id`` addresses the bundles; it is taken from every WELCOME.
+
+    ``participant_list()`` returns the hub's participant list with names and roles (spec 7), as last learnt from a
+    WELCOME or a bundle of the hub; it is kept in ``state_dir``, so it is known after a restart without network.
     """
 
     role = None
 
     def __init__(self, participant, operation, hub_host, hub_port=DEFAULT_PORT, timeout_s=10.0, backoff=(1.0, 10.0),
-                 mailbox_root=None, on_message=None, poll_s=0.5):
+                 mailbox_root=None, on_message=None, poll_s=0.5, state_dir=None):
         self.participant = participant
+        self._roster_path = os.path.join(state_dir, "participants.json") if state_dir else None
+        self._roster_lock = threading.Lock()    # a greeting and a medium import may learn the list at the same time
+        self._roster = self._load_roster()
         self.hub_id = "hub"
         self.mailbox = Mailbox(mailbox_root, participant, on_message, poll_s)
         self.operation = operation
@@ -65,6 +76,39 @@ class Participant:
 
     def message_body(self, msg_id):
         return self.mailbox.body(msg_id)
+
+    # --- participant list (spec 7) ----------------------------------------------------------------------------------
+    def participant_list(self):
+        """[{participant, name, role}] of the operation, the hub first (role ``hub``); empty until learnt."""
+        return [dict(e) for e in self._roster.get("participants", [])]
+
+    def _load_roster(self):
+        if self._roster_path:
+            try:
+                with open(self._roster_path, encoding="utf-8") as f:
+                    saved = json.load(f)
+                if roster.check_public(saved.get("participants")) is None:
+                    return saved
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError, AttributeError) as e:
+                log.warning("%s: participant list %s unreadable (%s), waiting for the hub", self.participant,
+                            self._roster_path, e)
+        return {}
+
+    def _learn_roster(self, participants, t):
+        """Keep the list the hub sent at hub time ``t`` (ms) unless a newer one is known (in a worker thread)."""
+        if participants is None or roster.check_public(participants) is not None:
+            return
+        with self._roster_lock:
+            if self._roster and self._roster.get("t", 0) > t:
+                return                              # e.g. an old stick after a newer greeting
+            new = {"t": t, "participants": participants}
+            if new == self._roster:
+                return
+            if self._roster_path:
+                write_json_atomic(self._roster_path, new)
+            self._roster = new
 
     # --- connection ------------------------------------------------------------------------------------------------
     def start(self):
@@ -124,6 +168,7 @@ class Participant:
             self.hub_id = w["hub"]
             self.clock_offset_ms = w["t"] - (t_hello + now_ms()) / 2
             self.timeout_s = float(w["timeout_s"])
+            await asyncio.to_thread(self._learn_roster, w.get("participants"), w["t"])
             tasks = [asyncio.ensure_future(ch.heartbeat(float(w["heartbeat_s"])))]
             self.mailbox.sender.start_session()
             await self.mailbox.notify()             # messages stored but untold before a break or restart
@@ -190,6 +235,8 @@ class Participant:
         if reason:
             report.problems.append(reason)
             return report
+        if isinstance(manifest.get("created"), int):
+            self._learn_roster(manifest.get("participants"), manifest["created"])
         box = self.mailbox.store
         skipped = set()
         for f in media.read_frames(path, manifest, report):

@@ -79,7 +79,8 @@ class Source(Participant):
                  zlib_level=1, on_message=None):
         os.makedirs(state_dir, exist_ok=True)
         super().__init__(participant, operation, hub_host, hub_port, timeout_s, backoff,
-                         mailbox_root=os.path.join(state_dir, "messages"), on_message=on_message, poll_s=poll_s)
+                         mailbox_root=os.path.join(state_dir, "messages"), on_message=on_message, poll_s=poll_s,
+                         state_dir=state_dir)
         self._state_path = os.path.join(state_dir, "source_state.json")
         saved = {}
         if os.path.exists(self._state_path):

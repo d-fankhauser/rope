@@ -130,6 +130,22 @@ the hub.
   - The hub keeps no delivery state per consumer. The consumer reports what it holds when it greets (`HELLO.have`,
     §14.5), so a restart of the hub or of the consumer loses nothing.
   - Order: streams in name order, each from its committed offset (see open point "catch-up order").
+- **Participant list (proposed, first implementation 2026-10-26):**
+  - Per participant: identifier, role, a **name** in plain language for the operator (default: the identifier) and,
+    for a consumer, a **selection** of streams. Anything else in the list is refused when the hub starts, with a
+    plain-language reason.
+  - **Selection:** patterns over the relayed names `<source>/<stream>`, e.g. `source-1/*` (all streams of one source)
+    or `*/rec-*`. `*` matches any characters including `/`, `?` exactly one; upper and lower case are different on
+    every system. Without a selection a consumer receives every stream (as before); an empty selection means none.
+    Only consumers have a selection: sources and recipients receive no streams.
+  - The selection applies to the network and to media in the same way. The hub checks it whenever it looks for
+    streams to send, so a changed list takes effect when the hub restarts with it. A consumer keeps what it already
+    holds when its selection becomes narrower; nothing is deleted.
+  - **Every participant learns the list** – identifier, name and role of everybody, the hub first with role
+    `hub` – in `WELCOME` (`participants`, §14.3) and in every bundle the hub writes (§8.6). An application can thus
+    show names and address messages also offline. The participant keeps the newest list it has seen (by the hub's
+    time), so an older stick never replaces a newer greeting. The selections stay at the hub: a participant does not
+    need to know what others receive.
 - **Group size:** a few devices, no open membership (**decided**).
 - **Hub down:** all participants keep collecting and send as soon as the hub is back. A standby hub is an open point.
 
@@ -221,7 +237,7 @@ committed offset, ignore duplicates, report damaged items. Network and media may
   - The hub imports bundles from all participants and exports one bundle per participant.
 - **Layout on the medium:** `rope/<operation>/<from>-to-<to>-<created ms>-<random>/`, with the frames in
   `frames-0001.rope`, … and a manifest `bundle.json` (`format`, `operation`, `from`, `to`, `created`, `files`,
-  `frames`, `complete`).
+  `frames`, `complete`; a bundle from the hub also carries `participants`, §7).
   - At most 1 GiB per frames file, because many sticks use FAT32 (limit 4 GiB per file).
   - A bundle is written under a name ending in `.partial` and renamed when it is complete and durable. A medium
     pulled out during the export therefore never holds a half bundle under a valid name.
@@ -431,7 +447,12 @@ connection. Types `0x80`–`0xFF` are extensions: a receiver that does not know 
 
 "Sender" and "receiver" are roles per stream: a source sends to the hub, and the hub sends to consumers.
 
-Optional keys: `SEGMENT` may carry `repair` (`true` or `false`, default `false`, §14.7).
+Optional keys:
+
+- `SEGMENT` may carry `repair` (`true` or `false`, default `false`, §14.7).
+- `WELCOME` may carry `participants`: the participant list as every participant may know it,
+  `[{"participant": …, "name": …, "role": …}]`, the hub first with role `hub` (§7). Added 2026-10-26; a participant
+  that does not know the key ignores it.
 
 ### 14.4 Values
 
@@ -529,8 +550,7 @@ Status: **proposed** (block size, the half rule and the 3 rounds are assumptions
       each from its committed offset.
 - [ ] Delivery report to the sender of a message (all recipients have it). First implementation: the sender sees
       "at the hub"; the hub knows per recipient whether it was delivered.
-- [ ] Which consumer receives which streams. First implementation: every consumer receives every stream of the
-      operation (participant list §7 may later name what each participant receives).
+- [x] Which consumer receives which streams: a selection per consumer in the participant list (§7, proposed).
 - [ ] Hub failure: standby hub or offline media only.
 - [ ] Offline media: block repair over media (needs two trips of the stick), and whether the core should help the
       application decide when a bundle on a stick can be deleted.
